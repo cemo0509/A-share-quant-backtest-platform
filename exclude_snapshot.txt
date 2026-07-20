@@ -1,0 +1,14 @@
+\node_modules\
+\python-embed\
+\dist\
+\dist_build\
+\build\
+\install_test_1.1.2\
+\v1.0发布包\
+\version_snapshots\
+\electron\dist\
+\.codebuddy\
+\.git\
+\__pycache__\
+\electron\node_modules\
+\electron\dist\

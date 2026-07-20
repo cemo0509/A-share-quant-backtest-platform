@@ -1,0 +1,47 @@
+# Python 依赖
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.env
+
+# 后端缓存数据
+backend/cache/*.parquet
+
+# Node
+node_modules/
+dist/
+dist-electron/
+*.log
+npm-debug.log*
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 打包产物（体积大）
+dist_build/
+build/
+
+# 嵌入式 Python（体积大，在新电脑上重新安装）
+python-embed/
+
+# 版本快照存档（体积大）
+version_snapshots/
+
+# 备份目录
+backup_visual_editor_原版/
+
+# 测试安装目录
+install_test_*/
+
+# 旧发布包
+v1.0发布包/

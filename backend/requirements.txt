@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pydantic
+backtrader
+akshare
+pandas
+numpy
+pyarrow

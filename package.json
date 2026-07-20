@@ -1,0 +1,26 @@
+{
+  "name": "quant-a-stock",
+  "version": "1.1.4",
+  "description": "A股量化回测与策略开发平台",
+  "author": "code",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "cd backend && python main.py",
+    "dev": "concurrently -n frontend,backend -c blue,green \"npm:dev:frontend\" \"npm:dev:backend\"",
+    "electron:dev": "concurrently -n frontend,electron -c blue,magenta \"npm:dev:frontend\" \"wait-on http://localhost:5173 && electron .\"",
+    "build:frontend": "npm --prefix frontend run build",
+    "electron:build": "npm run build:frontend && electron-builder",
+    "electron:build:fast": "electron-builder",
+    "electron:pack": "npm run build:frontend && electron-builder --dir",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^8.0.1"
+  }
+}

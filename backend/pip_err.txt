@@ -1,0 +1,2 @@
+WARNING: Connection timed out while downloading.
+WARNING: Attempting to resume incomplete download (13.9 MB/28.0 MB, attempt 1)

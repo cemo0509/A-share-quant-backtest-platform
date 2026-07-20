@@ -1,0 +1,4 @@
+  File "<string>", line 1
+    import akshare as ak, pandas as pd, traceback, logging; logging.disable(logging.CRITICAL); code='601166'; df=pd.DataFrame();\ntry:\n df=ak.stock_zh_a_hist_min_em(symbol=code, period='5', adjust='')\nexcept Exception as e:\n print('网络失败，降级为空 -=[]'); df=pd.DataFrame()\nprint('intraday 结果行数:', len(df)); print('不会再抛 500')
+                                                                                                                                 ^
+SyntaxError: unexpected character after line continuation character

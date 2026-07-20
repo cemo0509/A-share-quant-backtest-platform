@@ -1,0 +1,44 @@
+appId: com.quant.a-stock
+productName: A股量化回测平台
+directories:
+  output: dist_build
+  buildResources: build
+
+files:
+  - electron/**/*
+  - frontend/dist/**/*
+  - package.json
+
+win:
+  target: nsis
+  signAndEditExecutable: false
+
+nsis:
+  allowToChangeInstallationDirectory: true   # 允许用户自定义安装路径
+  createDesktopShortcut: always               # 创建桌面快捷方式
+  createStartMenuShortcut: true              # 创建开始菜单快捷方式
+  shortcutName: A股量化回测平台
+  oneClick: false                            # 显示安装向导（而不是一键安装）
+
+# 打包额外资源（后端代码 + 嵌入式 Python）
+extraResources:
+  - from: backend
+    to: backend
+    filter:
+      - "**/*.py"
+      - "**/*.txt"
+      - "**/*.json"
+      - "**/*.parquet"
+  # Python 嵌入式版本（用户无需安装 Python）
+  - from: python-embed
+    to: python
+    filter:
+      - "**/*"
+
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+
+linux:
+  target: AppImage
+  category: Development
