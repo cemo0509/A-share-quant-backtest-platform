@@ -483,16 +483,11 @@ def fetch_realtime_quote(symbols: list[str]) -> list[dict]:
                 logger.debug(f"使用缓存实时行情: {symbols}")
                 return cached_data
 
-    # 2. 尝试从 AKShare 获取真实数据
-    result = _fetch_realtime_from_akshare(symbols, now)
+    # 2. 通过数据源抽象层获取（默认东财，可切换通达信/雪球，失败自动降级到东财）
+    import core.datasource as datasource
+    result = datasource.fetch_realtime_quotes(symbols)
 
-    # 3. 如果真实数据为空，降级为模拟数据
-    if not result:
-        logger.warning(f"AKShare 实时行情获取失败，使用模拟数据: {symbols}")
-        from datetime import datetime as _dt
-        result = _generate_mock_realtime(symbols, _dt.now())
-
-    # 4. 更新缓存（线程安全）
+    # 3. 更新缓存（线程安全）
     with _REALTIME_CACHE_LOCK:
         _REALTIME_CACHE[cache_key] = (result, now)
     return result
@@ -1374,27 +1369,11 @@ def fetch_minute_kline(
             if cached and (_time.time() - cached[0] < _MINUTE_CACHE_TTL):
                 return cached[1].tail(limit).copy()
 
-    # 2. AKShare 拉取（用官方基础周期）
-    df = pd.DataFrame()
-    try:
-        import akshare as ak
-        raw = ak.stock_zh_a_hist_min_em(symbol=code, period=str(base_period), adjust="")
-        if not raw.empty:
-            df = raw.rename(columns={
-                "时间": "date", "开盘": "open", "最高": "high",
-                "最低": "low", "收盘": "close", "成交量": "volume", "成交额": "amount",
-            })
-            keep = ["date", "open", "high", "low", "close", "volume", "amount"]
-            df = df[[c for c in keep if c in df.columns]].copy()
-    except Exception as e:
-        logger.warning(f"分钟K线 AKShare 拉取失败 symbol={code} period={base_period}: {e}，降级模拟数据")
-        df = pd.DataFrame()
+    # 2. 通过数据源抽象层拉取（默认东财，可切换通达信/雪球，失败自动降级）
+    import core.datasource as datasource
+    df = datasource.fetch_minute_kline(code, base_period, max(limit, 240))
 
-    # 3. 降级：生成模拟分钟数据（用基础周期，聚合后再合成目标周期）
-    if df.empty:
-        df = _generate_mock_minute(code, str(base_period), max(limit, 200) * (target_period // base_period or 1))
-
-    # 4. 写入缓存（缓存基础周期数据，避免重复合成）
+    # 3. 写入缓存（缓存基础周期数据，避免重复合成）
     if use_cache and not df.empty:
         with _MINUTE_CACHE_LOCK:
             _MINUTE_CACHE[cache_key] = (_time.time(), df)
@@ -1408,6 +1387,29 @@ def fetch_minute_kline(
                 _MINUTE_CACHE[f"{code}_{target_period}"] = (_time.time(), df)
 
     return df.tail(limit).reset_index(drop=True)
+
+
+def _fetch_minute_from_akshare(code: str, base_period: int, count: int = 240) -> "pd.DataFrame":
+    """通过 AKShare（东方财富）拉取分钟K线，失败降级为模拟数据。
+
+    供数据源抽象层的东方财富源复用；返回基础周期的标准列 DataFrame。
+    """
+    df = pd.DataFrame()
+    try:
+        import akshare as ak
+        raw = ak.stock_zh_a_hist_min_em(symbol=code, period=str(base_period), adjust="")
+        if not raw.empty:
+            df = raw.rename(columns={
+                "时间": "date", "开盘": "open", "最高": "high",
+                "最低": "low", "收盘": "close", "成交量": "volume", "成交额": "amount",
+            })
+            keep = ["date", "open", "high", "low", "close", "volume", "amount"]
+            df = df[[c for c in keep if c in df.columns]].copy()
+    except Exception as e:
+        logger.warning(f"分钟K线 AKShare 拉取失败 symbol={code} period={base_period}: {e}")
+    if df.empty:
+        df = _generate_mock_minute(code, str(base_period), max(count, 200))
+    return df
 
 
 def _generate_mock_minute(symbol: str, period: str, count: int) -> "pd.DataFrame":

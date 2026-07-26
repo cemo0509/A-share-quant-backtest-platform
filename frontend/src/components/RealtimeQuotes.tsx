@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
-import { Card, Table, Tag, Spin, Button, Input, Space, Typography, message } from 'antd'
+import { Card, Table, Tag, Spin, Button, Input, Space, Typography, message, Select } from 'antd'
 import { ReloadOutlined, PlusOutlined } from '@ant-design/icons'
-import { getRealtimeQuotes } from '../services/api'
+import { getRealtimeQuotes, getDataSource, setDataSource } from '../services/api'
 
 const { Title } = Typography
 const { Search } = Input
@@ -76,6 +76,47 @@ export default function RealtimeQuotes() {
   useEffect(() => {
     localStorage.setItem('realtime_symbols', JSON.stringify(symbols))
   }, [symbols])
+
+  // 数据源选择与切换
+  const [dataSource, setDataSourceState] = useState<string>('eastmoney')
+  const [dataSourceOptions, setDataSourceOptions] = useState<string[]>(['eastmoney', 'tongdaxin', 'xueqiu'])
+  const [switching, setSwitching] = useState(false)
+
+  const loadDataSource = async () => {
+    try {
+      const res = await getDataSource()
+      const d = res.data?.data
+      if (d) {
+        setDataSourceState(d.active || 'eastmoney')
+        if (Array.isArray(d.available) && d.available.length) {
+          setDataSourceOptions(d.available)
+        }
+      }
+    } catch {
+      // 忽略：使用默认
+    }
+  }
+
+  useEffect(() => {
+    loadDataSource()
+  }, [])
+
+  const onSwitchSource = async (value: string) => {
+    setSwitching(true)
+    try {
+      const res = await setDataSource(value)
+      const d = res.data?.data
+      if (d) {
+        setDataSourceState(d.active || value)
+        message.success(`数据源已切换为：${d.active}`)
+      }
+      fetchQuotes()
+    } catch {
+      message.error('切换数据源失败')
+    } finally {
+      setSwitching(false)
+    }
+  }
 
   // 获取实时行情
   const fetchQuotes = async () => {
@@ -239,6 +280,18 @@ export default function RealtimeQuotes() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>实时行情</span>
           <Space>
+            <span style={{ fontSize: 12, color: '#999' }}>数据源</span>
+            <Select
+              value={dataSource}
+              onChange={onSwitchSource}
+              loading={switching}
+              size="small"
+              style={{ width: 110 }}
+              options={dataSourceOptions.map(s => ({
+                value: s,
+                label: s === 'eastmoney' ? '东方财富' : s === 'tongdaxin' ? '通达信' : s === 'xueqiu' ? '雪球' : s,
+              }))}
+            />
             <Button
               icon={<ReloadOutlined />}
               onClick={fetchQuotes}

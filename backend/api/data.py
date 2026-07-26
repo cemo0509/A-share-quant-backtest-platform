@@ -3,12 +3,18 @@ from __future__ import annotations
 
 import logging
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from core.data_loader import fetch_kline, list_cache, clear_cache, fetch_realtime_quote
+from core import datasource
 from models.schemas import FetchDataRequest, RealtimeQuoteRequest
 
 router = APIRouter()
 logger = logging.getLogger("data")
+
+
+class SetSourceRequest(BaseModel):
+    source: str = "eastmoney"
 
 
 @router.post("/fetch")
@@ -56,3 +62,19 @@ def get_realtime_quotes(req: RealtimeQuoteRequest):
     except Exception as e:
         logger.error(f"实时行情获取异常: {e}")
         raise HTTPException(status_code=500, detail="实时行情获取失败，请稍后重试")
+
+
+@router.get("/source")
+def get_source():
+    """查看当前数据源及可用源。"""
+    return {"status": "ok", "data": datasource.get_source_status()}
+
+
+@router.post("/source")
+def set_source(req: SetSourceRequest):
+    """切换实时数据源（eastmoney / tongdaxin / xueqiu）。失败自动降级东方财富。"""
+    ok = datasource.set_active_source(req.source)
+    if not ok:
+        raise HTTPException(status_code=400, detail="不支持的数据源，可选: eastmoney/tongdaxin/xueqiu")
+    return {"status": "ok", "data": datasource.get_source_status()}
+

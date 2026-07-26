@@ -3,6 +3,8 @@ uvicorn[standard]
 pydantic
 backtrader
 akshare
+pytdx
 pandas
 numpy
 pyarrow
+requests

@@ -42,6 +42,8 @@ export const fetchData = (data: { symbol: string; start_date: string; end_date: 
 export const getCache = () => api.get('/data/cache')
 export const clearCache = (symbol?: string) => api.delete('/data/cache', { params: { symbol } })
 export const getRealtimeQuotes = (symbols: string[]) => api.post('/data/realtime', { symbols })
+export const getDataSource = () => api.get('/data/source')
+export const setDataSource = (source: string) => api.post('/data/source', { source })
 
 // ===== 回测 =====
 export interface BacktestReq {

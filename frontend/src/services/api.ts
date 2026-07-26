@@ -8,6 +8,8 @@ export {
   runBacktest,
   runBacktestCode,
   getRealtimeQuotes,
+  getDataSource,
+  setDataSource,
   runOptimize,
   getOptimizeMetrics,
   exportResultJson,

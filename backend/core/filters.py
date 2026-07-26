@@ -40,8 +40,8 @@ def get_spot_snapshot(force_refresh: bool = False) -> pd.DataFrame:
 
     df = pd.DataFrame()
     try:
-        import akshare as ak
-        df = ak.stock_zh_a_spot_em()
+        import core.datasource as datasource
+        df = datasource.fetch_spot_snapshot()
     except Exception as e:
         logger.warning(f"获取全市场实时快照失败: {e}，返回空快照（过滤器放行）")
         df = pd.DataFrame()
