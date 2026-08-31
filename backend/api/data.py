@@ -64,12 +64,28 @@ def delete_cache(symbol: str = ""):
 @router.post("/realtime")
 def get_realtime_quotes(req: RealtimeQuoteRequest):
     """获取实时行情数据。"""
+    # 实时行情是高频轮询接口，弱网环境下数据源降级链路可能耗时较长
+    #（例如先尝试通达信再回退东财）。为防止前端长时间挂起，强制 12 秒
+    # 内必须返回；超时则返回 degraded 空结果，前端自行提示。
+    import concurrent.futures as _cf
+
+    def _fetch():
+        return fetch_realtime_quote(req.symbols)
+
     try:
-        data = fetch_realtime_quote(req.symbols)
+        with _cf.ThreadPoolExecutor(max_workers=1) as pool:
+            data = pool.submit(_fetch).result(timeout=12)
         return {"status": "ok", "data": data}
+    except _cf.TimeoutError:
+        logger.warning("实时行情获取超时（12s），降级返回空结果")
+        return {
+            "status": "ok",
+            "data": [],
+            "degraded": True,
+            "reason": "实时行情获取超时，已显示空数据",
+        }
     except Exception as e:
-        # 实时行情是页面高频轮询接口，网络抖动时降级为空结果，
-        # 避免前端持续飘红；真正的代码缺陷仍走 500。
+        # 网络抖动时降级为空结果，避免前端持续飘红；真正的代码缺陷仍走 500。
         if is_network_error(e):
             logger.warning(f"实时行情获取失败（网络/数据源）: {e}")
             return {

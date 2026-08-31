@@ -174,24 +174,47 @@ _TDX_HOSTS = [
 ]
 
 
-def _connect_tdx():
-    """连接通达信行情服务器，返回已连接的 api 或 None。"""
+def _connect_tdx(timeout_per_host: float = 2.0, max_total: float = 6.0):
+    """连接通达信行情服务器，返回已连接的 api 或 None。
+
+    策略：
+    1. 优先使用固定 IP 列表，每个连接限时 2 秒；
+    2. pytdx 底层 connect 在网络差时可能忽略 timeout 参数，
+       因此把整个连接过程放到线程中，强制 max_total 秒内必须返回，否则放弃；
+    3. 超时直接返回 None，让上层快速降级到东方财富。
+    """
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
     from pytdx.hq import TdxHq_API
-    api = TdxHq_API(raise_exception=False, auto_retry=True)
-    # 优先探测最优 IP
-    try:
-        from pytdx.util.best_ip import get_best_ip
-        ip, port = get_best_ip()
-        if api.connect(ip, port):
-            return api
-    except Exception:
-        pass
-    for host, port in _TDX_HOSTS:
+
+    start = _time.time()
+
+    def _try_one(host: str, port: int):
         try:
-            if api.connect(host, port):
+            api = TdxHq_API(raise_exception=False, auto_retry=False)
+            if api.connect(host, port, timeout=timeout_per_host):
                 return api
+            try:
+                api.disconnect()
+            except Exception:
+                pass
         except Exception:
-            continue
+            pass
+        return None
+
+    # 固定 IP 列表快速轮询
+    for host, port in _TDX_HOSTS:
+        if _time.time() - start >= max_total:
+            break
+        remain = max(0.5, max_total - (_time.time() - start))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            try:
+                api = pool.submit(_try_one, host, port).result(timeout=min(timeout_per_host, remain))
+                if api is not None:
+                    return api
+            except TimeoutError:
+                pass
+
     return None
 
 
@@ -435,8 +458,8 @@ class DataSourceManager:
         避免每次请求都重试已确认不可用的源（既拖慢响应，也会刷屏日志）。
         用户下次显式 set_active() 时才会重新启用该源。
 
-        日志统一使用「配置源名」 _active_name，而不是实际生效源 active_name，
-        否则会出现「eastmoney 失败: 无法连接通达信行情服务器」这类张冠李戴的文案。
+        注意：调用方必须在入口快照当前配置源名再传入 reason，
+        避免并发 set_active() 修改 _active_name 后，错误归属到错误的源。
         """
         self._last_error = reason
         logger.warning(reason)
@@ -445,16 +468,20 @@ class DataSourceManager:
 
     # ---- 路由方法（带降级） ----
     def fetch_realtime_quotes(self, symbols: list[str]) -> list[dict]:
+        # 入口快照：避免请求处理过程中被并发 set_active() 修改源名，
+        # 导致错误日志文案张冠李戴（例如显示 eastmoney 失败: 无法连接通达信）。
+        source_name = self._active_name
         try:
             res = self._active.fetch_realtime_quotes(symbols)
             if res:
                 return res
-            self._demote_to_eastmoney(f"数据源 {self._active_name} 返回空，已降级东方财富")
+            self._demote_to_eastmoney(f"数据源 {source_name} 返回空，已降级东方财富")
         except Exception as e:
-            self._demote_to_eastmoney(f"数据源 {self._active_name} 实时行情失败: {e}，已降级东方财富")
+            self._demote_to_eastmoney(f"数据源 {source_name} 实时行情失败: {e}，已降级东方财富")
         return self._eastmoney.fetch_realtime_quotes(symbols)
 
     def fetch_spot_snapshot(self) -> pd.DataFrame:
+        source_name = self._active_name
         try:
             return self._active.fetch_spot_snapshot()
         except NotImplementedError:
@@ -465,18 +492,19 @@ class DataSourceManager:
                 logger.warning(f"东方财富快照获取失败: {e}")
                 return pd.DataFrame()
         except Exception as e:
-            self._last_error = f"数据源 {self._active_name} 快照失败: {e}"
+            self._last_error = f"数据源 {source_name} 快照失败: {e}"
             logger.warning(self._last_error)
             return pd.DataFrame()
 
     def fetch_minute_kline(self, symbol: str, period: int, limit: int) -> pd.DataFrame:
+        source_name = self._active_name
         try:
             return self._active.fetch_minute_kline(symbol, period, limit)
         except NotImplementedError:
             # 该源本身不支持分钟K线，不属于故障，不触发降级
             return self._eastmoney.fetch_minute_kline(symbol, period, limit)
         except Exception as e:
-            self._demote_to_eastmoney(f"数据源 {self._active_name} 分钟K线失败: {e}，已降级东方财富")
+            self._demote_to_eastmoney(f"数据源 {source_name} 分钟K线失败: {e}，已降级东方财富")
             return self._eastmoney.fetch_minute_kline(symbol, period, limit)
 
 
