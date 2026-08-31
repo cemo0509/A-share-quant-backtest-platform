@@ -226,7 +226,10 @@ def _fetch_from_akshare_inner(
             logger.warning(f"新浪源拉取失败 symbol={symbol}: {e}")
 
     # 所有源失败，生成模拟 K 线数据
-    logger.info(f"生成模拟 K 线数据: symbol={symbol}")
+    logger.warning(
+        f"所有数据源均失败，降级为模拟数据: symbol={symbol} "
+        f"（该数据为随机生成，不代表真实行情）"
+    )
     return _generate_mock_kline(symbol, start_date, end_date, period)
 
 
@@ -295,17 +298,34 @@ def _generate_mock_kline(
         "amount": np.round(volumes * close_prices / 100, 2),  # 模拟成交额
     })
 
-    logger.info(f"生成 {len(df)} 条模拟 K 线数据")
+    # 降级为模拟数据是「静默失败」：用户会以为拿到的是真实行情，
+    # 并据此判断策略有效性。必须用 warning 级别而非 info，保证可追溯。
+    logger.warning(
+        f"生成 {len(df)} 条模拟K线数据（随机生成，非真实行情）: symbol={symbol} "
+        f"period={period} —— 基于该数据的回测/选股结果不可作为策略有效性依据"
+    )
     df.attrs["is_mock"] = True
     return df
 
 
 def list_cache() -> list[dict]:
-    """列出所有缓存的数据文件。"""
+    """列出所有缓存的数据文件，并标注是否为模拟数据。
+
+    ``is_mock`` 来自 parquet 中的 pandas attrs 标记（由 _generate_mock_kline 写入）。
+    暴露该字段是为了让「数据管理」页能区分真实行情与降级生成的随机数据，
+    避免用户把模拟数据当成真实行情使用。
+    """
     result = []
     for f in sorted(CACHE_DIR.glob("*.parquet")):
         try:
             df = pd.read_parquet(f, columns=["date"])
+            is_mock = False
+            try:
+                # 只读取 attrs 元数据，避免为了拿标记而加载整份数据
+                full = pd.read_parquet(f)
+                is_mock = bool(full.attrs.get("is_mock"))
+            except Exception:
+                pass
             result.append({
                 "file": f.name,
                 "symbol": f.stem.rsplit("_", 1)[0],
@@ -314,6 +334,7 @@ def list_cache() -> list[dict]:
                 "start": str(df["date"].min().date()) if not df.empty else None,
                 "end": str(df["date"].max().date()) if not df.empty else None,
                 "size_kb": round(f.stat().st_size / 1024, 1),
+                "is_mock": is_mock,
             })
         except Exception:
             pass

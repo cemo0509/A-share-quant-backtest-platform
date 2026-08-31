@@ -1,4 +1,4 @@
-import { Card, Empty, Typography, Button, Space, message } from 'antd'
+import { Card, Empty, Typography, Button, Space, message, Alert } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import { useStore } from '../stores'
 import MetricsPanel from '../components/MetricsPanel'
@@ -50,13 +50,21 @@ export default function Results() {
           <Button icon={<DownloadOutlined />} onClick={handleExportCsv}>导出交易 CSV</Button>
         </Space>
       </div>
-      <div style={{ marginTop: 12 }}>
-        {result.data_source === 'real' ? (
+      {/* 数据来源提示：模拟数据是随机生成的，必须醒目常驻提示，
+          否则用户会把随机数跑出的收益/夏普误判为策略有效 */}
+      {result.data_source === 'mock' ? (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginTop: 12 }}
+          message="本次回测基于模拟数据"
+          description="真实行情获取失败，已降级为随机生成的模拟K线。该结果（收益、夏普、回撤等）不反映任何真实市场规律，不可作为策略有效性依据。请检查网络后重新回测。"
+        />
+      ) : (
+        <div style={{ marginTop: 12 }}>
           <Typography.Text type="success">数据来源：真实行情（AKShare 新浪源）</Typography.Text>
-        ) : (
-          <Typography.Text type="warning">数据来源：模拟数据（未能获取真实行情，已降级）</Typography.Text>
-        )}
-      </div>
+        </div>
+      )}
       {result.trades && result.trades.length === 0 && (
         <Card style={{ marginTop: 16, background: '#fffbe6', borderColor: '#ffe58f' }}>
           <Typography.Text type="warning">

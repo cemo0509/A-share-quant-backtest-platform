@@ -1055,6 +1055,13 @@ def _scan_inner(
         logger.debug(f"回测 {symbol} 异常: {e}")
         return None
 
+    # 关键防护：模拟数据（网络失败时的随机兜底数据）绝不能产生选股信号。
+    # 否则弱网/离线时，随机游走生成的假K线会被策略判定为「有买入信号」，
+    # 导致扫描结果全是噪声，而用户无从分辨。
+    if bt_result.get("data_source") == "mock":
+        logger.debug(f"跳过 {symbol}：该股行情为模拟数据（真实数据获取失败）")
+        return None
+
     # 判断是否有买入信号（交易记录中有买入操作）
     trades = bt_result.get("trades", [])
     buy_signals = [t for t in trades if t.get("action") in ("买入",)]

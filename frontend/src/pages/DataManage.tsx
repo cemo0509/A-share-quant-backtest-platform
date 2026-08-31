@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Table, Button, Form, Input, DatePicker, Space, message, Popconfirm, Empty, Spin } from 'antd'
+import { Card, Table, Button, Form, Input, DatePicker, Space, message, Popconfirm, Empty, Spin, Tag, Alert } from 'antd'
 import dayjs from 'dayjs'
 import { fetchData, getCache, clearCache } from '../api'
 
@@ -13,6 +13,7 @@ interface CacheItem {
   start: string | null
   end: string | null
   size_kb: number
+  is_mock?: boolean
 }
 
 export default function DataManage() {
@@ -20,6 +21,9 @@ export default function DataManage() {
   const [loading, setLoading] = useState(false)
   const [tableLoading, setTableLoading] = useState(false)
   const [form] = Form.useForm()
+
+  // 模拟数据份数：用于顶部告警横幅
+  const mockCount = cache.filter((c) => c.is_mock).length
 
   const load = () => {
     setTableLoading(true)
@@ -71,9 +75,22 @@ export default function DataManage() {
     { title: '结束', dataIndex: 'end' },
     { title: '大小(KB)', dataIndex: 'size_kb' },
     {
+      title: '数据性质',
+      dataIndex: 'is_mock',
+      render: (isMock: boolean) =>
+        isMock ? (
+          <Tag color="red">模拟数据</Tag>
+        ) : (
+          <Tag color="green">真实行情</Tag>
+        ),
+    },
+    {
       title: '操作',
       render: (_: unknown, row: CacheItem) => (
-        <Popconfirm title="确认删除该缓存？" onConfirm={() => handleClear(row.symbol)}>
+        <Popconfirm
+          title={row.is_mock ? '该缓存为模拟数据，确认删除？' : '确认删除该缓存？'}
+          onConfirm={() => handleClear(row.symbol)}
+        >
           <Button size="small" danger>删除</Button>
         </Popconfirm>
       ),
@@ -106,6 +123,15 @@ export default function DataManage() {
           )
         }
       >
+        {mockCount > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`存在 ${mockCount} 份模拟数据缓存`}
+            description="这些是此前联网失败时随机生成的假数据，不含真实行情。选股扫描已自动跳过它们，建议联网后删除并重新下载。"
+          />
+        )}
         <Spin spinning={tableLoading}>
           {cache.length === 0 && !tableLoading ? (
             <Empty description="暂无缓存数据，请先下载股票数据" />
