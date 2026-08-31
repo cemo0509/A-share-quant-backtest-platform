@@ -21,8 +21,9 @@ class BacktestMetrics:
     annual_return: float         # 年化收益率 %
     # 风险类
     max_drawdown: float          # 最大回撤 %
-    # 风险调整
-    sharpe_ratio: float          # 夏普比率
+    # 风险调整（数据不足时夏普无法计算，为 None 而非 0，
+    # 避免把「算不出来」与「夏普为 0」混为一谈）
+    sharpe_ratio: Optional[float]  # 夏普比率（已年化）
     # 交易类
     win_rate: float              # 胜率 %
     profit_loss_ratio: float     # 盈亏比
@@ -76,17 +77,23 @@ def compute_metrics(cerebro: bt.Cerebro, result: Any, trades_list: Optional[list
     max_drawdown = drawdown.max.drawdown if hasattr(drawdown, "max") and drawdown.max.drawdown is not None else 0
 
     # 4. 夏普比率（从 analyzer 获取）
+    # 注意：数据不足时 backtrader 会返回 None。此前写法 `sharpe.get(...) or 0`
+    # 会把「算不出来」静默变成 0，与「夏普确实为 0」在界面上无法区分。
+    # 这里保留 None，由前端显示为「—」。
     sharpe = strat.analyzers.sharpe.get_analysis()
-    sharpe_ratio = sharpe.get("sharperatio", 0) or 0
+    sharpe_raw = sharpe.get("sharperatio", None)
+    sharpe_ratio = float(sharpe_raw) if sharpe_raw is not None else None
 
     # 5. 年化收益率（从 analyzer 获取）
+    # 用「实际天数/365」而非「自然年个数」作为年数：
+    # 回测 2024-06-01~2025-05-31（整 1 年）跨 2 个自然年，用自然年个数会把
+    # 1 年的收益开平方，年化收益被严重低估。
     annual = strat.analyzers.annualreturn.get_analysis()
     if annual:
-        # annual 是 {年份: 收益率} 字典，转为几何平均年化
         prod = 1.0
         for r in annual.values():
             prod *= (1 + r)
-        years = len(annual)
+        years = _years_from_data(strat)
         annual_return = (prod ** (1 / years) - 1) * 100 if years > 0 else 0
     else:
         annual_return = 0
@@ -95,13 +102,36 @@ def compute_metrics(cerebro: bt.Cerebro, result: Any, trades_list: Optional[list
         total_return=round(total_return, 2),
         annual_return=round(annual_return, 2),
         max_drawdown=round(max_drawdown, 2),
-        sharpe_ratio=round(sharpe_ratio, 3) if sharpe_ratio else 0,
+        sharpe_ratio=round(sharpe_ratio, 3) if sharpe_ratio is not None else None,
         win_rate=round(win_rate, 2),
         profit_loss_ratio=round(profit_loss_ratio, 3),
         total_trades=total_trades,
         win_trades=win_trades,
         loss_trades=loss_trades,
     )
+
+
+def _years_from_data(strat: Any) -> float:
+    """按回测实际跨越天数计算年数（而非自然年个数）。
+
+    AnnualReturn 返回 {年份: 收益率}，若直接用 len(annual) 当「年数」，
+    会把「跨越的自然年个数」误当作「实际年数」：
+      回测 2024-06-01 ~ 2025-05-31（整 1 年）→ 跨 2 个自然年 → years=2
+      → 1 年的收益被开平方 → 年化收益被系统性低估。
+
+    正确做法是用数据源首尾日期的实际天数 / 365。
+    """
+    try:
+        d = strat.datas[0]
+        n = len(d)
+        if n <= 1:
+            return 0.0
+        start_dt = d.datetime.datetime(-(n - 1))
+        end_dt = d.datetime.datetime(0)
+        days = (end_dt - start_dt).days
+        return days / 365.0 if days > 0 else 0.0
+    except Exception:
+        return 0.0
 
 
 def _extract_pnl_from_trades_list(trades_list: list) -> list[float]:

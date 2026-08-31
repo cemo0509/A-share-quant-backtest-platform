@@ -84,8 +84,9 @@ export default function CompareResultDetail({ visible, result, strategyName, onC
     {
       title: '盈亏',
       dataIndex: 'pnl',
+      // A 股约定：盈利=红，亏损=绿（与 StockScan/StockDetail 保持一致）
       render: (v?: number) =>
-        v !== undefined ? <span style={{ color: v >= 0 ? '#3f8600' : '#cf1322' }}>{v.toFixed(2)}</span> : '-',
+        v !== undefined ? <span style={{ color: v >= 0 ? '#cf1322' : '#3f8600' }}>{v.toFixed(2)}</span> : '-',
     },
   ]
 
@@ -108,7 +109,7 @@ export default function CompareResultDetail({ visible, result, strategyName, onC
                 value={m.total_return || 0}
                 precision={2}
                 suffix="%"
-                valueStyle={{ color: positive ? '#3f8600' : '#cf1322' }}
+                valueStyle={{ color: positive ? '#cf1322' : '#3f8600' }}
               />
             </Card>
           </Col>

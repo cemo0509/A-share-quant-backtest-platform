@@ -29,9 +29,10 @@ export default function TradeTable() {
     {
       title: '盈亏',
       dataIndex: 'pnl',
+      // A 股约定：盈利=红，亏损=绿（与 StockScan/StockDetail 保持一致）
       render: (v?: number) =>
         v !== undefined ? (
-          <span style={{ color: v >= 0 ? '#3f8600' : '#cf1322' }}>{v.toFixed(2)}</span>
+          <span style={{ color: v >= 0 ? '#cf1322' : '#3f8600' }}>{v.toFixed(2)}</span>
         ) : (
           '-'
         ),

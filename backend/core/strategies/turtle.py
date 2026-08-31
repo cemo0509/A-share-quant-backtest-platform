@@ -61,8 +61,9 @@ class TurtleStrategy(BaseStrategy):
             if self.data.high[0] >= self.donchian_high[-1]:
                 # 计算仓位大小（基于ATR的风险管理）
                 if atr_val > 0:
-                    size = int(self.broker.getvalue() * self.params.risk_percent / atr_val)
-                    size = max(size, 100)  # 至少100股
+                    # A 股申报数量必须是 100 股（1 手）的整数倍
+                    size = int(self.broker.getvalue() * self.params.risk_percent / atr_val) // 100 * 100
+                    size = max(size, 100)  # 至少1手
                 else:
                     size = 100
 
@@ -80,7 +81,8 @@ class TurtleStrategy(BaseStrategy):
             if (self.add_count < self.max_add
                     and atr_val > 0
                     and self.data.high[0] >= self.donchian_high_add[-1]):
-                size = int(self.broker.getvalue() * self.params.risk_percent / atr_val)
-                size = max(size, 100)
+                # A 股申报数量必须是 100 股（1 手）的整数倍
+                size = int(self.broker.getvalue() * self.params.risk_percent / atr_val) // 100 * 100
+                size = max(size, 100)  # 至少1手
                 self.add_count += 1
                 self.order = self.buy(size=size)

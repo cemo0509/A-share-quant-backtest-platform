@@ -117,7 +117,8 @@ class AdaptiveStrategy(BaseStrategy):
                 else:
                     size_pct = 0.3
                 
-                size = int(self.broker.getcash() * size_pct / self.data.close[0])
+                # A 股申报数量必须是 100 股（1 手）的整数倍
+                size = int(self.broker.getcash() * size_pct / self.data.close[0]) // 100 * 100
                 if size > 0:
                     self.order = self.buy(size=size)
         else:

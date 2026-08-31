@@ -6,12 +6,21 @@ import {
 } from '@ant-design/icons'
 import { useStore } from '../stores'
 
+// A 股约定：涨/盈利=红，跌/亏损=绿。
+// 此前本组件用「绿涨红跌」（国际惯例），与 StockScan/StockDetail 等页面的
+// 「红涨绿跌」相反，跨页面扫视时极易把方向看反。全平台统一为 A 股约定。
+const UP = '#cf1322'
+const DOWN = '#3f8600'
+
 export default function MetricsPanel() {
   const { result } = useStore()
   if (!result) return null
   const m = result.metrics
 
   const positive = m.total_return >= 0
+  // 夏普在数据不足时为 null（无法计算），显示「—」而非 0，
+  // 避免把「算不出来」误读成「风险调整收益为 0」。
+  const sharpeKnown = m.sharpe_ratio !== null && m.sharpe_ratio !== undefined
 
   return (
     <Row gutter={[16, 16]}>
@@ -22,7 +31,7 @@ export default function MetricsPanel() {
             value={m.total_return}
             precision={2}
             suffix="%"
-            valueStyle={{ color: positive ? '#3f8600' : '#cf1322' }}
+            valueStyle={{ color: positive ? UP : DOWN }}
             prefix={positive ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
           />
         </Card>
@@ -46,7 +55,11 @@ export default function MetricsPanel() {
       </Col>
       <Col span={4}>
         <Card>
-          <Statistic title="夏普比率" value={m.sharpe_ratio} precision={3} />
+          <Statistic
+            title="夏普比率(年化)"
+            value={sharpeKnown ? m.sharpe_ratio : '—'}
+            precision={sharpeKnown ? 3 : undefined}
+          />
         </Card>
       </Col>
       <Col span={4}>

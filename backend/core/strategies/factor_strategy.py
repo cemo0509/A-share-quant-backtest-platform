@@ -93,7 +93,8 @@ class FactorScoreStrategy(BaseStrategy):
             if score > self.params.buy_threshold:
                 cash = self.broker.getcash()
                 price = self.data.close[0]
-                size = int(cash / price * 0.5)  # 提高仓位到50%
+                # A 股申报数量必须是 100 股（1 手）的整数倍
+                size = int(cash / price * 0.5) // 100 * 100  # 提高仓位到50%
                 if self.params.printlog:
                     self.log(f"买入信号! score={score:.4f}, cash={cash:.2f}, price={price:.2f}, size={size}")
                 if size > 0:

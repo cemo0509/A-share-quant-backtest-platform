@@ -56,10 +56,94 @@ _STOCK_NAME_MAP_LOADED = False
 _STOCK_NAME_MAP_LOCK = threading.Lock()  # 线程安全保护
 
 
-def _cache_path(symbol: str, period: str) -> Path:
-    """生成缓存文件路径：cache/{symbol}_{period}.parquet"""
+def _adjust_tag(adjust: str) -> str:
+    """复权方式标签（用于缓存文件名）。不复权用 "raw"。"""
+    if not adjust:
+        return "raw"
+    return str(adjust).lower()
+
+
+def _cache_path(symbol: str, period: str, adjust: str = "qfq") -> Path:
+    """生成缓存文件路径：cache/{symbol}_{period}_{adjust}.parquet
+
+    复权方式必须进缓存键：qfq / hfq / 不复权 的价格序列完全不同。
+    若共用同一缓存，先跑 qfq 再切 hfq 会直接命中 qfq 的缓存，
+    导致「对比两种复权结果」实际在拿同一份数据比自己。
+    """
+    safe = symbol.replace("/", "_")
+    return CACHE_DIR / f"{safe}_{period}_{_adjust_tag(adjust)}.parquet"
+
+
+def _legacy_cache_path(symbol: str, period: str) -> Path:
+    """旧版缓存路径（无 adjust 后缀）。
+
+    旧缓存按 qfq 语义保留，仅当请求 qfq 时作为兜底读取，
+    避免升级后用户已有缓存全部失效。
+    """
     safe = symbol.replace("/", "_")
     return CACHE_DIR / f"{safe}_{period}.parquet"
+
+
+def _resolve_cache_file(symbol: str, period: str, adjust: str) -> Path:
+    """定位缓存文件：优先新版（带 adjust），不存在则回退旧版（仅 qfq）。"""
+    new_path = _cache_path(symbol, period, adjust)
+    if new_path.exists():
+        return new_path
+    if _adjust_tag(adjust) == "qfq":
+        legacy = _legacy_cache_path(symbol, period)
+        if legacy.exists():
+            return legacy
+    return new_path
+
+
+def _covers(df: "pd.DataFrame", start_date: str, end_date: str) -> bool:
+    """缓存是否「完全覆盖」请求区间。
+
+    关键：不能用「命中行数 > 0」判断。若缓存 2015–2020 而请求 2018–2024，
+    命中了 3 年数据就会被误判为够用，于是返回 2018–2020，
+    末端 4 年（含最近行情）凭空消失，且界面无任何提示。
+    """
+    try:
+        if df is None or df.empty or "date" not in df.columns:
+            return False
+        dts = pd.to_datetime(df["date"])
+        return bool(dts.min() <= pd.to_datetime(start_date)
+                    and dts.max() >= pd.to_datetime(end_date))
+    except Exception:
+        return False
+
+
+def _covers_safe(cache_file: Path, start_date: str, end_date: str) -> bool:
+    """读取缓存文件并判断是否完全覆盖请求区间（读失败按未覆盖处理）。"""
+    try:
+        if not cache_file.exists():
+            return False
+        df_tmp = pd.read_parquet(cache_file, columns=["date"])
+        return _covers(df_tmp, start_date, end_date)
+    except Exception:
+        return False
+
+
+def _merge_kline(old: "pd.DataFrame | None", new: "pd.DataFrame | None") -> "pd.DataFrame":
+    """合并新旧K线：按日期去重（新数据优先），保持时间升序。
+
+    覆盖式写入会把请求区间外的旧数据丢弃，导致增量更新形同虚设，
+    因此拉取到新数据后必须与已有缓存合并再落盘。
+    """
+    if new is None or (hasattr(new, "empty") and new.empty):
+        return old if old is not None else pd.DataFrame()
+    if old is None or (hasattr(old, "empty") and old.empty):
+        return new
+    try:
+        merged = pd.concat([old, new], ignore_index=True)
+        merged["date"] = pd.to_datetime(merged["date"])
+        merged = (merged
+                  .drop_duplicates(subset=["date"], keep="last")
+                  .sort_values("date")
+                  .reset_index(drop=True))
+        return merged
+    except Exception:
+        return new
 
 
 def fetch_kline(
@@ -83,37 +167,28 @@ def fetch_kline(
     Returns:
         DataFrame，列：date, open, high, low, close, volume，date 为 datetime
     """
-    cache_file = _cache_path(symbol, period)
-    raw = None
+    cache_file = _resolve_cache_file(symbol, period, adjust)
+    cached = None
 
     # 1. 尝试读取缓存
     if use_cache and cache_file.exists():
         try:
-            raw = pd.read_parquet(cache_file)
-            raw["date"] = pd.to_datetime(raw["date"])
+            cached = pd.read_parquet(cache_file)
+            cached["date"] = pd.to_datetime(cached["date"])
         except Exception:
             # 缓存文件损坏，删除后重新拉取
             cache_file.unlink(missing_ok=True)
-            raw = None
+            cached = None
 
-    # 2. 缓存不存在/损坏，或缓存区间不覆盖用户所选范围，从 AKShare 拉取
-    if raw is None or raw.empty:
-        raw = _fetch_from_akshare(symbol, start_date, end_date, period, adjust)
+    # 2. 只有「完全覆盖」请求区间才直接用缓存；否则必须增量拉取。
+    #    （部分覆盖会静默截断区间末端，是回测结果失真的重要来源）
+    if cached is not None and not cached.empty and _covers(cached, start_date, end_date):
+        raw = cached
+        fetched = None
     else:
-        cached_mask = (
-            raw["date"] >= pd.to_datetime(start_date)
-        ) & (
-            raw["date"] <= pd.to_datetime(end_date)
-        )
-        cached_hit = raw.loc[cached_mask]
-        if cached_hit.empty:
-            # 缓存存在但所选区间内没有数据（如缓存是更早/更晚的行情），
-            # 不能返回空，应重新拉取；AKShare 失败时 _fetch_from_akshare 内部会 fallback 模拟数据。
-            logger.info(
-                f"缓存区间不覆盖所选范围 (缓存={raw['date'].min().date()}~{raw['date'].max().date()}, "
-                f"请求={start_date}~{end_date})，重新拉取: symbol={symbol}"
-            )
-            raw = _fetch_from_akshare(symbol, start_date, end_date, period, adjust)
+        fetched = _fetch_from_akshare(symbol, start_date, end_date, period, adjust)
+        # 与旧缓存合并，避免覆盖式写入丢弃请求区间外的历史数据
+        raw = _merge_kline(cached, fetched)
 
     if raw is None or raw.empty:
         return raw if raw is not None else pd.DataFrame()
@@ -122,18 +197,35 @@ def fetch_kline(
     mask = (raw["date"] >= pd.to_datetime(start_date)) & (raw["date"] <= pd.to_datetime(end_date))
     result = raw.loc[mask].reset_index(drop=True)
 
+    # 保留模拟数据标记（切片/合并可能丢失 attrs）
+    if fetched is not None and fetched.attrs.get("is_mock"):
+        raw.attrs["is_mock"] = True
+        result.attrs["is_mock"] = True
+
+    is_mock = bool(raw.attrs.get("is_mock"))
+
     # 4. 写回缓存：把本次拉到的全量数据落盘 parquet，
     #    供后续扫描/回测/「缓存数据」断点续传直接命中本地，零网络。
-    #    （之前遗漏写盘，导致 fetch_kline 永远读不到缓存、每次都联网，
-    #      表现就是「缓存不下来、也不报错」。仅当覆盖所选区间且非空时写。）
-    if not result.empty and (raw is not None) and not raw.empty:
+    #
+    #    模拟数据绝不落盘：假数据一旦写入并「覆盖」了请求区间，
+    #    后续即使网络恢复也会命中该缓存，导致永远拿不到真实行情
+    #    （即假数据永久占坑）。不落盘则下次会自动重新尝试联网。
+    if is_mock:
+        logger.warning(
+            f"模拟数据未写入缓存（避免假数据永久占位）: symbol={symbol} "
+            f"period={period} adjust={adjust}"
+        )
+        return result
+
+    if not result.empty and not raw.empty:
         try:
             to_write = raw.copy()
             to_write["date"] = pd.to_datetime(to_write["date"])
-            cache_file = _cache_path(symbol, period)
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            to_write.to_parquet(cache_file, index=False)
-            logger.debug(f"已写入缓存: {cache_file}（{len(to_write)} 行）")
+            to_write.attrs["is_mock"] = False
+            write_path = _cache_path(symbol, period, adjust)
+            write_path.parent.mkdir(parents=True, exist_ok=True)
+            to_write.to_parquet(write_path, index=False)
+            logger.debug(f"已写入缓存: {write_path}（{len(to_write)} 行）")
         except Exception as e:
             logger.warning(f"写入缓存失败 {symbol}: {e}")
     return result
@@ -308,33 +400,73 @@ def _generate_mock_kline(
     return df
 
 
+def _read_is_mock(f: Path) -> bool:
+    """高效读取缓存文件的 is_mock 标记——只读 parquet 元数据，不加载数据。
+
+    pandas 会把 DataFrame.attrs 序列化到独立的 ``PANDAS_ATTRS`` 元数据键，
+    因此无需 read_parquet 整份数据即可拿到标记。全市场预热后有数千个
+    缓存文件，整份读取会让「数据管理」页卡死。
+    """
+    try:
+        import json as _json
+        import pyarrow.parquet as pq
+
+        meta = pq.read_schema(str(f)).metadata or {}
+        raw = meta.get(b"PANDAS_ATTRS") or meta.get("PANDAS_ATTRS")
+        if not raw:
+            return False
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        return bool(_json.loads(raw).get("is_mock"))
+    except Exception:
+        return False
+
+
+_ADJUST_TAGS = {"qfq", "hfq", "raw"}
+
+
+def _parse_cache_name(name: str) -> tuple[str, str]:
+    """从缓存文件名解析 (symbol, period)。
+
+    兼容两种命名：
+    - 新版 ``{symbol}_{period}_{adjust}.parquet``（adjust ∈ qfq/hfq/raw）
+    - 旧版 ``{symbol}_{period}.parquet``
+
+    注意不能直接 rsplit 取最后一段当 period——新版文件名的最后一段是
+    复权标签，否则 ``000001_daily_qfq`` 会被解析成 symbol=000001_daily。
+    """
+    stem = name[:-len(".parquet")] if name.endswith(".parquet") else name
+    parts = stem.rsplit("_", 1)
+
+    # 新版：末段是复权标签，先剥掉再解析 symbol_period
+    if len(parts) == 2 and parts[1] in _ADJUST_TAGS:
+        inner = parts[0].rsplit("_", 1)
+        return (inner[0], inner[1]) if len(inner) == 2 else (parts[0], "daily")
+
+    # 旧版：{symbol}_{period}
+    return (parts[0], parts[1]) if len(parts) == 2 else (stem, "daily")
+
+
 def list_cache() -> list[dict]:
     """列出所有缓存的数据文件，并标注是否为模拟数据。
 
-    ``is_mock`` 来自 parquet 中的 pandas attrs 标记（由 _generate_mock_kline 写入）。
-    暴露该字段是为了让「数据管理」页能区分真实行情与降级生成的随机数据，
-    避免用户把模拟数据当成真实行情使用。
+    ``is_mock`` 来自 parquet 元数据中的 pandas attrs 标记。暴露该字段
+    是为了让「数据管理」页能区分真实行情与降级生成的随机数据。
     """
     result = []
     for f in sorted(CACHE_DIR.glob("*.parquet")):
         try:
             df = pd.read_parquet(f, columns=["date"])
-            is_mock = False
-            try:
-                # 只读取 attrs 元数据，避免为了拿标记而加载整份数据
-                full = pd.read_parquet(f)
-                is_mock = bool(full.attrs.get("is_mock"))
-            except Exception:
-                pass
+            symbol, period = _parse_cache_name(f.name)
             result.append({
                 "file": f.name,
-                "symbol": f.stem.rsplit("_", 1)[0],
-                "period": f.stem.rsplit("_", 1)[1] if "_" in f.stem else "daily",
+                "symbol": symbol,
+                "period": period,
                 "rows": len(df),
                 "start": str(df["date"].min().date()) if not df.empty else None,
                 "end": str(df["date"].max().date()) if not df.empty else None,
                 "size_kb": round(f.stat().st_size / 1024, 1),
-                "is_mock": is_mock,
+                "is_mock": _read_is_mock(f),
             })
         except Exception:
             pass
@@ -1098,25 +1230,51 @@ async def _fetch_kline_direct_eastmoney(
         return pd.DataFrame()
 
 
-def _write_to_cache_sync(symbol: str, period: str, df: pd.DataFrame) -> None:
-    """同步写入 parquet 缓存（由线程池执行，避免阻塞事件循环）。"""
+def _write_to_cache_sync(
+    symbol: str, period: str, df: pd.DataFrame, adjust: str = "qfq"
+) -> None:
+    """同步写入 parquet 缓存（由线程池执行，避免阻塞事件循环）。
+
+    与 fetch_kline 保持同一约束：
+    - 缓存键含 adjust（避免前/后复权串味）；
+    - 模拟数据绝不落盘（避免假数据永久占位，网络恢复后拿不到真实行情）；
+    - 与已有缓存合并，避免覆盖式写入丢弃区间外历史数据。
+    """
     if df is None or df.empty:
+        return
+    if df.attrs.get("is_mock"):
+        logger.warning(f"模拟数据不写入缓存: symbol={symbol} period={period}")
         return
     try:
         to_write = df.copy()
         to_write["date"] = pd.to_datetime(to_write["date"])
-        cache_file = _cache_path(symbol, period)
+        cache_file = _cache_path(symbol, period, adjust)
+
+        # 与已有缓存合并，避免丢弃请求区间外的旧数据
+        if cache_file.exists():
+            try:
+                old = pd.read_parquet(cache_file)
+                old["date"] = pd.to_datetime(old["date"])
+                to_write = _merge_kline(old, to_write)
+            except Exception:
+                pass
+
+        to_write.attrs["is_mock"] = False
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         to_write.to_parquet(cache_file, index=False)
     except Exception as e:
         logger.warning(f"写入缓存失败 {symbol}: {e}")
 
 
-async def _write_to_cache_async(symbol: str, period: str, df: pd.DataFrame) -> None:
+async def _write_to_cache_async(
+    symbol: str, period: str, df: pd.DataFrame, adjust: str = "qfq"
+) -> None:
     """异步写入 parquet 缓存（将磁盘 IO 卸载到线程池）。"""
     loop = _asyncio.get_running_loop()
     executor = _get_cache_executor()
-    await loop.run_in_executor(executor, _write_to_cache_sync, symbol, period, df)
+    await loop.run_in_executor(
+        executor, _write_to_cache_sync, symbol, period, df, adjust
+    )
 
 
 # ==================== 批量预热（扫描前一次性下载时间范围内数据） ====================
@@ -1170,17 +1328,9 @@ def prefetch_klines(
             elif sym.startswith(("4", "8")):
                 sym = "bj" + sym
 
-        cache_file = _cache_path(sym, period)
-        skip = False
-        if cache_file.exists():
-            try:
-                df_tmp = pd.read_parquet(cache_file)
-                if not df_tmp.empty:
-                    dts = pd.to_datetime(df_tmp["date"])
-                    if (dts.min() <= pd.to_datetime(start_date)) and (dts.max() >= pd.to_datetime(end_date)):
-                        skip = True
-            except Exception:
-                pass
+        # 只用「完全覆盖」的缓存，且缓存键需匹配复权方式（预热固定走 qfq）
+        cache_file = _resolve_cache_file(sym, period, "qfq")
+        skip = _covers_safe(cache_file, start_date, end_date)
 
         if skip:
             cached += 1

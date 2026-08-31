@@ -71,7 +71,9 @@ class SmartExitStrategy(BaseStrategy):
                 # 计算买入数量（使用50%的资金）
                 cash = self.broker.getcash()
                 price = self.data.close[0]
-                size = int(cash / price * 0.5)
+                # A 股最小交易单位为 1 手 = 100 股，申报数量必须是 100 的整数倍。
+                # 此前未取整到整百，会产生 137 股这类真实市场无法成交的委托。
+                size = int(cash / price * 0.5) // 100 * 100
                 if size > 0:
                     self.order = self.buy(size=size)
         else:
@@ -105,8 +107,11 @@ class SmartExitStrategy(BaseStrategy):
                 return
             
             # 3. 硬止损检查（无论是否盈利都检查）
+            # hard_stop_pct 是百分比（12.0 表示 12%），必须 /100 转成小数。
+            # 此前漏了 /100，导致 1-12.0 = -11.0，止损价 = -11 × 成本价，
+            # current_price < 负数 恒为 False → 硬止损从未触发过。
             if self.entry_price > 0 and self.params.hard_stop_pct > 0:
-                hard_stop_price = self.entry_price * (1 - self.params.hard_stop_pct)
+                hard_stop_price = self.entry_price * (1 - self.params.hard_stop_pct / 100)
                 if current_price < hard_stop_price:
                     if self.params.printlog:
                         self.log("触发硬止损")

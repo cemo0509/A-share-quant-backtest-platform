@@ -99,7 +99,13 @@ def run_backtest(
     cerebro = bt.Cerebro()
     cerebro.adddata(data)
     cerebro.broker.setcash(cash)
-    cerebro.broker.setcommission(commission=commission)
+    # A 股完整交易成本（见 _AStockCommissionInfo）：
+    # 佣金双边 + 最低 5 元、印花税 0.05% 仅卖出、过户费 0.001% 双边。
+    # 只设 commission 会漏掉印花税（单边卖出征收，是最重的一项），
+    # 使高换手策略的年化收益系统性虚高。
+    cerebro.broker.addcommissioninfo(
+        _AStockCommissionInfo(commission=commission), symbol
+    )
     # 滑点：固定百分比
     cerebro.broker.set_slippage_perc(slippage)
 
@@ -139,7 +145,17 @@ def run_backtest(
     cerebro.addstrategy(strategy_cls, **bt_params)
 
     # 5. 添加分析器
-    cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name="sharpe", timeframe=bt.TimeFrame.Days)
+    # 夏普必须年化：backtrader 的 SharpeRatio 默认 annualize=False，
+    # 日频数据下返回的是「日夏普」，只有真实年化夏普的 1/√252 ≈ 1/15.87。
+    # 未年化会让所有策略的夏普被系统性低估，据此排序的参数优化选出的是噪声。
+    cerebro.addanalyzer(
+        bt.analyzers.SharpeRatio,
+        _name="sharpe",
+        timeframe=bt.TimeFrame.Days,
+        riskfreerate=0.0,
+        annualize=True,
+        convertrate=True,
+    )
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
     cerebro.addanalyzer(bt.analyzers.AnnualReturn, _name="annualreturn")
@@ -151,7 +167,16 @@ def run_backtest(
 
     # 6. 运行回测
     start_cash = cerebro.broker.getvalue()
-    result = cerebro.run()
+    try:
+        result = cerebro.run()
+    except ZeroDivisionError as e:
+        # backtrader 的 RSI 等指标在区间内出现「连续单边行情」时会除零崩溃
+        # （平均跌幅/涨幅为 0）。这里转成明确的中文提示，
+        # 避免以裸 ZeroDivisionError 冒泡成 500、用户完全无从判断原因。
+        raise ValueError(
+            "指标计算失败：所选区间内可能存在连续单边行情（如持续上涨/下跌），"
+            "导致 RSI 等技术指标无法计算。请更换股票或调整回测区间后重试。"
+        ) from e
     end_cash = cerebro.broker.getvalue()
 
     strat = result[0]
@@ -194,6 +219,54 @@ class _EquityCurveAnalyzer(bt.Analyzer):
         date = self.strategy.datas[0].datetime.date(0)
         value = self.strategy.broker.getvalue()
         self.equity_curve.append({"date": date.isoformat(), "value": round(value, 2)})
+
+
+class _AStockCommissionInfo(bt.CommInfoBase):
+    """A 股真实交易成本模型。
+
+    backtrader 内置的 setcommission(commission=rate) 只建模了「按比例双边佣金」，
+    会漏掉 A 股两项真实且重要的成本：
+
+    ==========  ============  ========  ======================================
+    项目        费率           方向      说明
+    ==========  ============  ========  ======================================
+    佣金        约万 2.5~3    双边      不足 5 元按 5 元收
+    印花税      0.05%（千五） 仅卖出    最重的一项，漏掉会显著虚高收益
+    过户费      0.001%        双边      沪市收取，此处双边简化计入
+    ==========  ============  ========  ======================================
+
+    漏掉印花税对高换手策略是致命的：一年交易 20 次即少算约 1% 成本，
+    对年化 15% 的策略意味着约 6.7% 的收益虚高。
+    """
+
+    params = (
+        ("commission", 0.0003),   # 佣金费率（双边）
+        ("min_commission", 5.0),  # 单笔最低佣金（元）
+        ("stamp_duty", 0.0005),   # 印花税 0.05%，仅卖出
+        ("transfer_fee", 0.00001),  # 过户费 0.001%，双边
+        ("stocklike", True),
+        ("commtype", bt.CommInfoBase.COMM_PERC),
+    )
+
+    def _getcommission(self, size, price, pseudoexec):
+        """计算单笔佣金（不含印花税/过户费，那部分在 _getcommission 之外计）。"""
+        turnover = abs(size) * price
+        comm = turnover * self.p.commission
+        return max(comm, self.p.min_commission) if turnover > 0 else 0.0
+
+    def getcommission(self, size, price):
+        """backtrader 在订单执行时调用此接口计算总成本。"""
+        turnover = abs(size) * price
+        if turnover <= 0:
+            return 0.0
+        # 佣金（双边，含最低 5 元）
+        cost = max(turnover * self.p.commission, self.p.min_commission)
+        # 过户费（双边）
+        cost += turnover * self.p.transfer_fee
+        # 印花税（仅卖出征收）
+        if size < 0:
+            cost += turnover * self.p.stamp_duty
+        return cost
 
 
 class _AllInSizer(bt.Sizer):

@@ -24,10 +24,14 @@ logger = logging.getLogger("datasource")
 # 公共：历史K线缓存（用于涨跌统计字段，与 data_loader 共用同一 parquet）
 # ---------------------------------------------------------------------------
 def _load_hist(symbol: str) -> Optional[pd.DataFrame]:
-    """从 data_loader 的日线缓存读取历史K线（用于计算涨跌统计字段）。"""
+    """从 data_loader 的日线缓存读取历史K线（用于计算涨跌统计字段）。
+
+    缓存文件名带复权标签，且存在无标签的旧版文件，统一走
+    _resolve_cache_file 解析（该函数负责新旧路径兼容）。
+    """
     try:
-        from core.data_loader import CACHE_DIR
-        cache_file = CACHE_DIR / f"{symbol}_daily.parquet"
+        from core.data_loader import _resolve_cache_file
+        cache_file = _resolve_cache_file(symbol, "daily", "qfq")
         if cache_file.exists():
             df = pd.read_parquet(cache_file)
             df["date"] = pd.to_datetime(df["date"])
