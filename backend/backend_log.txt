@@ -1,0 +1,23 @@
+INFO:     Will watch for changes in these directories: ['c:\\Users\\22864\\CodeBuddy\\量化软件开发\\backend']
+INFO:     Started server process [20420]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:52342 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52395 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52396 - "GET /api/stocks/kline?symbol=sz000552&period=daily&limit=200&adjust=qfq HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52407 - "GET /api/stocks/indicators?symbol=sz000552 HTTP/1.1" 200 OK
+2026-08-31 13:28:04,351 [INFO] stock_names: 从 JSON 缓存加载股票名称: 5528 只
+2026-08-31 13:28:04,352 [INFO] data_loader: 从 StockNameCache 加载股票名称映射: 5528 只
+2026-08-31 13:28:10,084 [WARNING] data_loader: AKShare 实时行情获取失败: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-08-31 13:28:10,084 [WARNING] datasource: 东方财富实时行情获取失败，使用模拟数据
+INFO:     127.0.0.1:52408 - "POST /api/data/realtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52418 - "GET /api/stocks/signals?symbol=sz000552&strategy=macd HTTP/1.1" 200 OK
+2026-08-31 13:28:10,499 [ERROR] stocks: 分时数据获取异常: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+INFO:     127.0.0.1:52419 - "GET /api/stocks/intraday?symbol=sz000552 HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:54655 - "POST /api/data/source HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54686 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54687 - "POST /api/data/source HTTP/1.1" 200 OK
+2026-08-31 13:30:00,448 [WARNING] datasource: eastmoney 失败: 无法连接通达信行情服务器，回退东方财富
+  0%|          | 0/59 [00:00<?, ?it/s]  2%|▏         | 1/59 [00:01<01:50,  1.90s/it]  3%|▎         | 2/59 [00:05<02:42,  2.85s/it]  5%|▌         | 3/59 [00:07<02:19,  2.50s/it]  7%|▋         | 4/59 [00:09<02:01,  2.21s/it]  8%|▊         | 5/59 [00:11<01:56,  2.16s/it] 10%|█         | 6/59 [00:12<01:39,  1.89s/it]                                              2026-08-31 13:30:27,508 [WARNING] data_loader: AKShare 实时行情获取失败: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-08-31 13:30:27,509 [WARNING] datasource: 东方财富实时行情获取失败，使用模拟数据

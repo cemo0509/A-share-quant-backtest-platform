@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from core.market_state import MarketStateDetector, get_index_data
+from core.net_errors import is_network_error, degraded_payload
 
 router = APIRouter()
 logger = logging.getLogger("market")
@@ -47,6 +48,13 @@ def get_market_state(
             "data": state,
         }
     except Exception as e:
+        if is_network_error(e):
+            return degraded_payload("市场状态", e, empty={
+                "trend": "normal",
+                "trend_20d": 0.0,
+                "volatility": "normal",
+                "multi_trend": {},
+            })
         logger.error(f"市场状态获取异常: {e}")
         raise HTTPException(status_code=500, detail="市场状态获取失败，请稍后重试")
 
@@ -75,5 +83,9 @@ def get_market_trend(
             }
         }
     except Exception as e:
+        if is_network_error(e):
+            return degraded_payload(
+                "市场趋势", e, empty={"trend": "normal", "change_20d": 0.0}
+            )
         logger.error(f"市场趋势获取异常: {e}")
         raise HTTPException(status_code=500, detail="市场趋势获取失败，请稍后重试")

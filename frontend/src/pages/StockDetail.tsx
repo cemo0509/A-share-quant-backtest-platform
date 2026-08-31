@@ -104,11 +104,15 @@ export default function StockDetail() {
   const loadData = async () => {
     setLoading(true)
     const errors: string[] = []
+    // 数据源降级：接口返回结构完整但数据为空（弱网/数据源不可用），
+    // 不抛错但需提示用户，否则图表静默空白会让人以为程序坏了。
+    const degraded: string[] = []
 
     // 独立请求：每个接口失败不影响其他
     const run = async <T,>(label: string, fn: () => Promise<T>, setter: (data: T) => void) => {
       try {
         const res = await fn()
+        if ((res as any)?.data?.degraded) degraded.push(label)
         setter(res)
       } catch (e: any) {
         const msg = e?.response?.data?.detail || e?.message || '未知错误'
@@ -159,6 +163,8 @@ export default function StockDetail() {
 
     if (errors.length > 0) {
       message.warning(`部分数据加载失败: ${errors.join('; ')}`, 5)
+    } else if (degraded.length > 0) {
+      message.info(`${degraded.join('、')}暂不可用（网络或数据源问题），已显示空白`, 4)
     }
 
     setLoading(false)

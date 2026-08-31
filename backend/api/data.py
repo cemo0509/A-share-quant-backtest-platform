@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from core.data_loader import fetch_kline, list_cache, clear_cache, fetch_realtime_quote
 from core import datasource
+from core.net_errors import is_network_error
 from models.schemas import FetchDataRequest, RealtimeQuoteRequest
 
 router = APIRouter()
@@ -36,6 +37,13 @@ def fetch_data(req: FetchDataRequest):
     except HTTPException:
         raise
     except Exception as e:
+        # 下载是主动操作，失败需明确告知；网络类问题用 503 与真正的服务端错误区分，
+        # 避免日志把「外部数据源不可用」记成服务端 bug。
+        if is_network_error(e):
+            logger.warning(f"数据拉取失败（网络/数据源）: {e}")
+            raise HTTPException(
+                status_code=503, detail="行情数据源暂时不可用，请检查网络后重试"
+            )
         logger.error(f"数据拉取异常: {e}")
         raise HTTPException(status_code=500, detail="数据获取失败，请稍后重试")
 
@@ -60,6 +68,16 @@ def get_realtime_quotes(req: RealtimeQuoteRequest):
         data = fetch_realtime_quote(req.symbols)
         return {"status": "ok", "data": data}
     except Exception as e:
+        # 实时行情是页面高频轮询接口，网络抖动时降级为空结果，
+        # 避免前端持续飘红；真正的代码缺陷仍走 500。
+        if is_network_error(e):
+            logger.warning(f"实时行情获取失败（网络/数据源）: {e}")
+            return {
+                "status": "ok",
+                "data": [],
+                "degraded": True,
+                "reason": "实时行情暂不可用（网络或数据源问题）",
+            }
         logger.error(f"实时行情获取异常: {e}")
         raise HTTPException(status_code=500, detail="实时行情获取失败，请稍后重试")
 

@@ -59,4 +59,5 @@ echo  Packaging completed successfully!
 echo  Installer location: dist_build\ folder
 echo ================================
 echo.
-pause
+REM pause removed: automated CI / CodeBuddy task panel should exit cleanly
+exit /b 0

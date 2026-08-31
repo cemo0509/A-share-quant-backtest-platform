@@ -7,6 +7,7 @@ import akshare as ak
 from fastapi import APIRouter, HTTPException, Query
 
 from core.market_state import MarketStateDetector, get_index_data
+from core.net_errors import is_network_error, degraded_payload
 from data.stock_names import search_stocks as search_stocks_cache
 
 router = APIRouter()
@@ -60,6 +61,9 @@ def search_stocks(keyword: str = Query(..., description="搜索关键词（股�
                 ]
             }
     except Exception as e:
+        # 网络/数据源不可用是常态（弱网、代理、限流），降级返回空结果而非 500
+        if is_network_error(e):
+            return degraded_payload("搜索服务", e, empty=[])
         logger.error(f"股票搜索异常: {e}")
         raise HTTPException(status_code=500, detail="搜索服务暂时不可用")
 
@@ -132,6 +136,8 @@ def get_kline_data(
 
         return {"status": "ok", "data": data}
     except Exception as e:
+        if is_network_error(e):
+            return degraded_payload("K线数据", e)
         logger.error(f"K线数据获取异常: {e}")
         raise HTTPException(status_code=500, detail="K线数据获取失败，请稍后重试")
 
@@ -174,6 +180,10 @@ def get_intraday_data(
 
         return {"status": "ok", "data": data}
     except Exception as e:
+        # 弱网/代理/非交易时段下 akshare 常抛连接类异常，不应以 500 刷红前端，
+        # 降级为空数据并带 degraded 标记，由前端友好提示。
+        if is_network_error(e):
+            return degraded_payload("分时数据", e)
         logger.error(f"分时数据获取异常: {e}")
         raise HTTPException(status_code=500, detail="分时数据获取失败，请稍后重试")
 
@@ -217,6 +227,8 @@ def get_indicators(
 
         return {"status": "ok", "data": indicators}
     except Exception as e:
+        if is_network_error(e):
+            return degraded_payload("技术指标", e, empty={"dates": []})
         logger.error(f"技术指标计算异常: {e}")
         raise HTTPException(status_code=500, detail="技术指标计算失败，请稍后重试")
 
@@ -264,6 +276,8 @@ def get_strategy_signals(
         signals = _compute_signals(closes, highs, lows, volumes, dates, strategy)
         return {"status": "ok", "data": signals}
     except Exception as e:
+        if is_network_error(e):
+            return degraded_payload("策略信号", e)
         logger.error(f"策略信号计算异常: {e}")
         raise HTTPException(status_code=500, detail="策略信号计算失败，请稍后重试")
 
@@ -393,6 +407,13 @@ def get_market_state(
             "data": state,
         }
     except Exception as e:
+        if is_network_error(e):
+            return degraded_payload("市场状态", e, empty={
+                "trend": "normal",
+                "trend_20d": 0.0,
+                "volatility": "normal",
+                "multi_trend": {},
+            })
         logger.error(f"市场状态获取异常: {e}")
         raise HTTPException(status_code=500, detail="市场状态获取失败，请稍后重试")
 

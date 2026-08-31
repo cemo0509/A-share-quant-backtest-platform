@@ -428,28 +428,44 @@ class DataSourceManager:
             "last_error": self._last_error,
         }
 
+    def _demote_to_eastmoney(self, reason: str) -> None:
+        """降级到东方财富并记录原因。
+
+        降级具有「粘性」：一旦活跃源失败就把 _active 复位为东方财富，
+        避免每次请求都重试已确认不可用的源（既拖慢响应，也会刷屏日志）。
+        用户下次显式 set_active() 时才会重新启用该源。
+
+        日志统一使用「配置源名」 _active_name，而不是实际生效源 active_name，
+        否则会出现「eastmoney 失败: 无法连接通达信行情服务器」这类张冠李戴的文案。
+        """
+        self._last_error = reason
+        logger.warning(reason)
+        if self._active is not self._eastmoney:
+            self._active = self._eastmoney
+
     # ---- 路由方法（带降级） ----
     def fetch_realtime_quotes(self, symbols: list[str]) -> list[dict]:
         try:
             res = self._active.fetch_realtime_quotes(symbols)
             if res:
                 return res
-            self._last_error = f"{self.active_name} 返回空，回退东方财富"
+            self._demote_to_eastmoney(f"数据源 {self._active_name} 返回空，已降级东方财富")
         except Exception as e:
-            self._last_error = f"{self.active_name} 失败: {e}，回退东方财富"
-            logger.warning(self._last_error)
+            self._demote_to_eastmoney(f"数据源 {self._active_name} 实时行情失败: {e}，已降级东方财富")
         return self._eastmoney.fetch_realtime_quotes(symbols)
 
     def fetch_spot_snapshot(self) -> pd.DataFrame:
         try:
             return self._active.fetch_spot_snapshot()
         except NotImplementedError:
+            # 该源本身不支持快照（如雪球/通达信），不属于故障，不触发降级
             try:
                 return self._eastmoney.fetch_spot_snapshot()
-            except Exception:
+            except Exception as e:
+                logger.warning(f"东方财富快照获取失败: {e}")
                 return pd.DataFrame()
         except Exception as e:
-            self._last_error = f"{self.active_name} 快照失败: {e}，回退空快照"
+            self._last_error = f"数据源 {self._active_name} 快照失败: {e}"
             logger.warning(self._last_error)
             return pd.DataFrame()
 
@@ -457,10 +473,10 @@ class DataSourceManager:
         try:
             return self._active.fetch_minute_kline(symbol, period, limit)
         except NotImplementedError:
+            # 该源本身不支持分钟K线，不属于故障，不触发降级
             return self._eastmoney.fetch_minute_kline(symbol, period, limit)
         except Exception as e:
-            self._last_error = f"{self.active_name} 分钟K线失败: {e}，回退东方财富"
-            logger.warning(self._last_error)
+            self._demote_to_eastmoney(f"数据源 {self._active_name} 分钟K线失败: {e}，已降级东方财富")
             return self._eastmoney.fetch_minute_kline(symbol, period, limit)
 
 

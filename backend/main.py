@@ -18,6 +18,7 @@ import numpy as _np
 
 from api import backtest, data, strategy, trading, stocks, optimize, export, market, stock_scan
 from api import visual_editor, monitor
+from core.net_errors import is_network_error as _is_network_error
 
 # 日志配置：控制台 + 文件轮转（单文件最大 5MB，保留 3 个历史文件）
 LOG_DIR = Path(__file__).parent / "logs"
@@ -171,6 +172,20 @@ async def global_exception_handler(request: Request, exc: Exception):
     # 透传关键系统异常，不吞掉
     if isinstance(exc, _PASSTHROUGH_EXCEPTIONS):
         raise exc
+
+    # 外部数据源不可用（弱网/代理/限流）不是服务端缺陷：返回 503 并以 WARNING
+    # 记录，避免与真正的代码 bug 混在一起，前端也能给出准确的「网络」提示。
+    if _is_network_error(exc):
+        logger.warning(
+            f"外部数据源不可用: {request.method} {request.url.path}\n{exc}"
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "detail": "行情数据源暂时不可用，请检查网络后重试",
+            },
+        )
 
     logger.error(f"未捕获异常: {request.method} {request.url.path}\n{traceback.format_exc()}")
     return JSONResponse(
