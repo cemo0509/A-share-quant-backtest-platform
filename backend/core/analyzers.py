@@ -30,6 +30,13 @@ class BacktestMetrics:
     total_trades: int            # 总交易笔数
     win_trades: int              # 盈利笔数
     loss_trades: int             # 亏损笔数
+    # ---- 扩展风险指标（Q-08）----
+    # 均为可选：数据不足时算不出来，返回 None 而不是 0。
+    volatility: Optional[float] = None        # 年化波动率 %
+    sortino_ratio: Optional[float] = None     # 索提诺比率（只惩罚下行波动）
+    calmar_ratio: Optional[float] = None      # 卡玛比率（年化收益/最大回撤）
+    max_drawdown_days: Optional[int] = None   # 最长回撤修复期（交易日）
+    trades_per_year: Optional[float] = None   # 年化交易次数（换手频率）
 
     def to_dict(self) -> dict:
         """安全地转换为字典，处理 numpy/非序列化类型。"""
@@ -40,7 +47,12 @@ class BacktestMetrics:
         return result
 
 
-def compute_metrics(cerebro: bt.Cerebro, result: Any, trades_list: Optional[list] = None) -> BacktestMetrics:
+def compute_metrics(
+    cerebro: bt.Cerebro,
+    result: Any,
+    trades_list: Optional[list] = None,
+    equity_curve: Optional[list] = None,
+) -> BacktestMetrics:
     """从 Backtrader 回测结果计算指标。
 
     Args:
@@ -48,6 +60,8 @@ def compute_metrics(cerebro: bt.Cerebro, result: Any, trades_list: Optional[list
         result: cerebro.run() 返回值
         trades_list: 交易明细列表（来自 _TradeRecordAnalyzer），优先用于交易统计。
                      每一项可为 {..., "pnl": x}（平仓记录）或 backtrader Trade 对象。
+        equity_curve: 资金曲线 [{date, value}, ...]，用于计算波动率/Sortino/
+                      回撤修复期等扩展风险指标。
     """
     strat = result[0] if isinstance(result, list) else result
 
@@ -89,14 +103,23 @@ def compute_metrics(cerebro: bt.Cerebro, result: Any, trades_list: Optional[list
     # 回测 2024-06-01~2025-05-31（整 1 年）跨 2 个自然年，用自然年个数会把
     # 1 年的收益开平方，年化收益被严重低估。
     annual = strat.analyzers.annualreturn.get_analysis()
+    years = _years_from_data(strat)
     if annual:
         prod = 1.0
         for r in annual.values():
             prod *= (1 + r)
-        years = _years_from_data(strat)
         annual_return = (prod ** (1 / years) - 1) * 100 if years > 0 else 0
     else:
         annual_return = 0
+
+    # 6. 扩展风险指标（Q-08）：波动率 / Sortino / Calmar / 回撤修复期 / 年化交易次数
+    ext = _extended_risk_metrics(
+        equity_curve=equity_curve,
+        annual_return=annual_return,
+        max_drawdown=max_drawdown,
+        total_trades=total_trades,
+        years=years,
+    )
 
     return BacktestMetrics(
         total_return=round(total_return, 2),
@@ -108,7 +131,103 @@ def compute_metrics(cerebro: bt.Cerebro, result: Any, trades_list: Optional[list
         total_trades=total_trades,
         win_trades=win_trades,
         loss_trades=loss_trades,
+        volatility=ext.get("volatility"),
+        sortino_ratio=ext.get("sortino_ratio"),
+        calmar_ratio=ext.get("calmar_ratio"),
+        max_drawdown_days=ext.get("max_drawdown_days"),
+        trades_per_year=ext.get("trades_per_year"),
     )
+
+
+def _extended_risk_metrics(
+    equity_curve: Optional[list],
+    annual_return: float,
+    max_drawdown: float,
+    total_trades: int,
+    years: float,
+) -> dict:
+    """计算扩展风险指标：波动率 / Sortino / Calmar / 回撤修复期 / 年化交易次数。
+
+    这些指标原本缺失，导致无法回答「这个策略波动大不大」
+    「回撤后多久才修复」「交易是否过于频繁」等核心风控问题。
+
+    Args:
+        equity_curve: 资金曲线 [{date, value}, ...]
+        annual_return: 年化收益率 %
+        max_drawdown: 最大回撤 %
+        total_trades: 总交易笔数
+        years: 回测年数（实际天数/365）
+
+    Returns:
+        dict，各字段在数据不足时为 None
+    """
+    empty = {
+        "volatility": None,
+        "sortino_ratio": None,
+        "calmar_ratio": None,
+        "max_drawdown_days": None,
+        "trades_per_year": None,
+    }
+
+    # 年化交易次数（换手频率）：不依赖资金曲线，能算就先算
+    if years and years > 0:
+        empty["trades_per_year"] = round(total_trades / years, 2)
+
+    # 卡玛比率：年化收益 / 最大回撤。回撤为 0 时无意义（视为 None）
+    if max_drawdown and max_drawdown > 0:
+        empty["calmar_ratio"] = round(annual_return / max_drawdown, 3)
+
+    if not equity_curve or len(equity_curve) < 3:
+        return empty
+
+    try:
+        values = [float(p.get("value", 0)) for p in equity_curve if p.get("value") is not None]
+        if len(values) < 3:
+            return empty
+
+        # 日收益率序列
+        rets: list[float] = []
+        for i in range(1, len(values)):
+            prev = values[i - 1]
+            if prev > 0:
+                rets.append(values[i] / prev - 1)
+        n = len(rets)
+        if n < 2:
+            return empty
+
+        # 年化波动率：日收益标准差 × √252
+        mean = sum(rets) / n
+        variance = sum((r - mean) ** 2 for r in rets) / (n - 1)
+        daily_vol = variance ** 0.5
+        empty["volatility"] = round(daily_vol * (252 ** 0.5) * 100, 2)
+
+        # Sortino：用下行偏差代替总波动，只惩罚亏损方向的波动
+        downside_sq = sum(min(r, 0.0) ** 2 for r in rets) / n
+        downside_dev = (downside_sq ** 0.5) * (252 ** 0.5)
+        annualized_ret = mean * 252
+        empty["sortino_ratio"] = (
+            round(annualized_ret / downside_dev, 3) if downside_dev > 0 else None
+        )
+
+        # 回撤修复期：资金曲线处于「水下」的最长连续交易日数
+        peak = values[0]
+        underwater_start: Optional[int] = None
+        longest = 0
+        for i, v in enumerate(values):
+            if v >= peak:
+                peak = v
+                if underwater_start is not None:
+                    longest = max(longest, i - underwater_start)
+                    underwater_start = None
+            elif underwater_start is None:
+                underwater_start = i
+        if underwater_start is not None:
+            longest = max(longest, len(values) - 1 - underwater_start)
+        empty["max_drawdown_days"] = int(longest)
+    except Exception:
+        pass
+
+    return empty
 
 
 def _years_from_data(strat: Any) -> float:

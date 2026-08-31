@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Card, Table, Button, Form, Input, DatePicker, Space, message, Popconfirm, Empty, Spin, Tag, Alert } from 'antd'
 import dayjs from 'dayjs'
-import { fetchData, getCache, clearCache } from '../api'
+import { fetchData, getCache, clearCache, clearStaleCache } from '../api'
 
 const { RangePicker } = DatePicker
 
@@ -14,6 +14,8 @@ interface CacheItem {
   end: string | null
   size_kb: number
   is_mock?: boolean
+  age_days?: number
+  stale?: boolean
 }
 
 export default function DataManage() {
@@ -24,6 +26,8 @@ export default function DataManage() {
 
   // 模拟数据份数：用于顶部告警横幅
   const mockCount = cache.filter((c) => c.is_mock).length
+  // 过期缓存份数（超过 30 天未更新）
+  const staleCount = cache.filter((c) => c.stale).length
 
   const load = () => {
     setTableLoading(true)
@@ -66,6 +70,22 @@ export default function DataManage() {
     }
   }
 
+  // 清理长期未更新的缓存（默认 30 天）
+  const handleClearStale = async () => {
+    try {
+      const res = await clearStaleCache(30)
+      const n = res.data?.deleted ?? 0
+      if (n === 0) {
+        message.info('没有超过 30 天的过期缓存')
+      } else {
+        message.success(`已清理 ${n} 份过期缓存`)
+      }
+      load()
+    } catch {
+      message.error('清理过期缓存失败')
+    }
+  }
+
   const columns = [
     { title: '文件', dataIndex: 'file' },
     { title: '代码', dataIndex: 'symbol' },
@@ -75,11 +95,23 @@ export default function DataManage() {
     { title: '结束', dataIndex: 'end' },
     { title: '大小(KB)', dataIndex: 'size_kb' },
     {
+      title: '更新于',
+      dataIndex: 'age_days',
+      render: (age?: number, row?: CacheItem) =>
+        age === undefined ? '-' : (
+          <span style={{ color: row?.stale ? '#faad14' : undefined }}>
+            {age < 1 ? '今天' : `${age.toFixed(0)} 天前`}
+          </span>
+        ),
+    },
+    {
       title: '数据性质',
       dataIndex: 'is_mock',
-      render: (isMock: boolean) =>
+      render: (isMock: boolean, row: CacheItem) =>
         isMock ? (
           <Tag color="red">模拟数据</Tag>
+        ) : row.stale ? (
+          <Tag color="orange">已过期</Tag>
         ) : (
           <Tag color="green">真实行情</Tag>
         ),
@@ -117,9 +149,19 @@ export default function DataManage() {
         title="本地数据缓存"
         extra={
           cache.length > 0 && (
-            <Popconfirm title="确认清空全部缓存？" onConfirm={() => handleClear()}>
-              <Button danger>清空全部</Button>
-            </Popconfirm>
+            <Space>
+              {staleCount > 0 && (
+                <Popconfirm
+                  title={`确认清理 ${staleCount} 份超过 30 天未更新的缓存？`}
+                  onConfirm={handleClearStale}
+                >
+                  <Button>清理过期缓存</Button>
+                </Popconfirm>
+              )}
+              <Popconfirm title="确认清空全部缓存？" onConfirm={() => handleClear()}>
+                <Button danger>清空全部</Button>
+              </Popconfirm>
+            </Space>
           )
         }
       >

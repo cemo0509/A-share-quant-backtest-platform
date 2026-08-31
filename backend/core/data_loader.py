@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import threading
+import time
 
 import pandas as pd
 
@@ -447,17 +448,33 @@ def _parse_cache_name(name: str) -> tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) == 2 else (stem, "daily")
 
 
-def list_cache() -> list[dict]:
-    """列出所有缓存的数据文件，并标注是否为模拟数据。
+# 缓存新鲜度阈值（天）。日线数据每天都在增长，长期不更新的缓存会
+# 让回测缺少最近行情。超过该天数的缓存会被标记为 stale，由用户手动清理。
+CACHE_STALE_DAYS = 30.0
 
-    ``is_mock`` 来自 parquet 元数据中的 pandas attrs 标记。暴露该字段
-    是为了让「数据管理」页能区分真实行情与降级生成的随机数据。
+
+def _cache_age_days(f: Path) -> float:
+    """缓存文件距上次更新的天数。"""
+    try:
+        return (time.time() - f.stat().st_mtime) / 86400.0
+    except Exception:
+        return 0.0
+
+
+def list_cache() -> list[dict]:
+    """列出所有缓存的数据文件，并标注是否为模拟数据 / 是否过期。
+
+    - ``is_mock``：来自 parquet 元数据中的 pandas attrs 标记，用于区分
+      真实行情与降级生成的随机数据。
+    - ``age_days``/``stale``：缓存新鲜度。全市场预热后有数千个文件，
+      没有年龄信息就无法判断哪些缓存已经过时。
     """
     result = []
     for f in sorted(CACHE_DIR.glob("*.parquet")):
         try:
             df = pd.read_parquet(f, columns=["date"])
             symbol, period = _parse_cache_name(f.name)
+            age = _cache_age_days(f)
             result.append({
                 "file": f.name,
                 "symbol": symbol,
@@ -467,10 +484,31 @@ def list_cache() -> list[dict]:
                 "end": str(df["date"].max().date()) if not df.empty else None,
                 "size_kb": round(f.stat().st_size / 1024, 1),
                 "is_mock": _read_is_mock(f),
+                "age_days": round(age, 1),
+                "stale": age > CACHE_STALE_DAYS,
             })
         except Exception:
             pass
     return result
+
+
+def clear_stale_cache(max_age_days: float = CACHE_STALE_DAYS) -> int:
+    """清理超过指定天数的缓存文件，返回删除数量。
+
+    全市场预热一次会产生 5000+ 个 parquet，磁盘无上限增长。
+    这里按「最后更新时间」清理长期未刷新的缓存，
+    近期活跃使用的数据不受影响。
+    """
+    cutoff = time.time() - max_age_days * 86400.0
+    count = 0
+    for f in CACHE_DIR.glob("*.parquet"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+                count += 1
+        except Exception:
+            pass
+    return count
 
 
 def clear_cache(symbol: Optional[str] = None) -> int:

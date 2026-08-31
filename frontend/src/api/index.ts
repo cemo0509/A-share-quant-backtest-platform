@@ -41,6 +41,8 @@ export const fetchData = (data: { symbol: string; start_date: string; end_date: 
   api.post('/data/fetch', data)
 export const getCache = () => api.get('/data/cache')
 export const clearCache = (symbol?: string) => api.delete('/data/cache', { params: { symbol } })
+export const clearStaleCache = (maxAgeDays = 30) =>
+  api.delete('/data/cache/stale', { params: { max_age_days: maxAgeDays } })
 export const getRealtimeQuotes = (symbols: string[]) => api.post('/data/realtime', { symbols })
 export const getDataSource = () => api.get('/data/source')
 export const setDataSource = (source: string) => api.post('/data/source', { source })

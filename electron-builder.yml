@@ -28,7 +28,9 @@ extraResources:
       - "**/*.py"
       - "**/*.txt"
       - "**/*.json"
-      - "**/*.parquet"
+      # 注意：不要打包 "**/*.parquet"。
+      # 开发者本地缓存的 K 线数据（含网络失败时降级生成的历史模拟数据）
+      # 会被直接分发给用户，且用户无法分辨。缓存应在用户机器上重新拉取。
   # Python 嵌入式版本（用户无需安装 Python）
   - from: python-embed
     to: python

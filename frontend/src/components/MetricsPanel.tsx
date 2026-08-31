@@ -21,6 +21,8 @@ export default function MetricsPanel() {
   // 夏普在数据不足时为 null（无法计算），显示「—」而非 0，
   // 避免把「算不出来」误读成「风险调整收益为 0」。
   const sharpeKnown = m.sharpe_ratio !== null && m.sharpe_ratio !== undefined
+  // 扩展风险指标同样可能为 null（数据不足/回撤为 0 等），统一显示「—」
+  const fmt = (v?: number | null) => (v === null || v === undefined ? '—' : v)
 
   return (
     <Row gutter={[16, 16]}>
@@ -57,7 +59,7 @@ export default function MetricsPanel() {
         <Card>
           <Statistic
             title="夏普比率(年化)"
-            value={sharpeKnown ? m.sharpe_ratio : '—'}
+            value={m.sharpe_ratio ?? '—'}
             precision={sharpeKnown ? 3 : undefined}
           />
         </Card>
@@ -79,12 +81,38 @@ export default function MetricsPanel() {
       </Col>
       <Col span={8}>
         <Card>
-          <Statistic title="盈利笔数" value={m.win_trades} valueStyle={{ color: '#3f8600' }} />
+          <Statistic title="盈利笔数" value={m.win_trades} valueStyle={{ color: UP }} />
         </Card>
       </Col>
       <Col span={8}>
         <Card>
-          <Statistic title="亏损笔数" value={m.loss_trades} valueStyle={{ color: '#cf1322' }} />
+          <Statistic title="亏损笔数" value={m.loss_trades} valueStyle={{ color: DOWN }} />
+        </Card>
+      </Col>
+      {/* ---- 扩展风险指标（Q-08）：波动/Sortino/Calmar/回撤修复期/换手频率 ---- */}
+      <Col span={8}>
+        <Card>
+          <Statistic title="年化波动率" value={fmt(m.volatility)} suffix={m.volatility != null ? '%' : ''} />
+        </Card>
+      </Col>
+      <Col span={8}>
+        <Card>
+          <Statistic title="索提诺比率" value={fmt(m.sortino_ratio)} />
+        </Card>
+      </Col>
+      <Col span={8}>
+        <Card>
+          <Statistic title="卡玛比率" value={fmt(m.calmar_ratio)} />
+        </Card>
+      </Col>
+      <Col span={8}>
+        <Card>
+          <Statistic title="回撤修复期" value={m.max_drawdown_days ?? '—'} suffix={m.max_drawdown_days != null ? '天' : ''} />
+        </Card>
+      </Col>
+      <Col span={8}>
+        <Card>
+          <Statistic title="年化交易次数" value={fmt(m.trades_per_year)} suffix={m.trades_per_year != null ? '次/年' : ''} />
         </Card>
       </Col>
     </Row>

@@ -5,7 +5,9 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.data_loader import fetch_kline, list_cache, clear_cache, fetch_realtime_quote
+from core.data_loader import (
+    fetch_kline, list_cache, clear_cache, fetch_realtime_quote, clear_stale_cache,
+)
 from core import datasource
 from core.net_errors import is_network_error
 from models.schemas import FetchDataRequest, RealtimeQuoteRequest
@@ -59,6 +61,17 @@ def delete_cache(symbol: str = ""):
     """清理缓存。symbol 为空则清空全部。"""
     count = clear_cache(symbol or None)
     return {"status": "ok", "deleted": count}
+
+
+@router.delete("/cache/stale")
+def delete_stale_cache(max_age_days: float = 30.0):
+    """清理长期未更新的缓存（默认 30 天）。
+
+    全市场预热会产生数千个 parquet，磁盘无上限增长。
+    按「最后更新时间」清理，近期活跃使用的数据不受影响。
+    """
+    count = clear_stale_cache(max_age_days)
+    return {"status": "ok", "deleted": count, "max_age_days": max_age_days}
 
 
 @router.post("/realtime")

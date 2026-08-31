@@ -4,12 +4,24 @@ export interface BacktestMetrics {
   total_return: number
   annual_return: number
   max_drawdown: number
-  sharpe_ratio: number
+  /** 夏普比率（已年化）。数据不足时为 null，前端显示「—」 */
+  sharpe_ratio: number | null
   win_rate: number
   profit_loss_ratio: number
   total_trades: number
   win_trades: number
   loss_trades: number
+  // ---- 扩展风险指标（Q-08）：数据不足时为 null ----
+  /** 年化波动率 % */
+  volatility?: number | null
+  /** 索提诺比率（只惩罚下行波动） */
+  sortino_ratio?: number | null
+  /** 卡玛比率（年化收益 / 最大回撤） */
+  calmar_ratio?: number | null
+  /** 最长回撤修复期（交易日） */
+  max_drawdown_days?: number | null
+  /** 年化交易次数（换手频率） */
+  trades_per_year?: number | null
 }
 
 export interface TradeRecord {

@@ -38,13 +38,17 @@ _NETWORK_EXC_NAMES = (
 )
 
 # 异常消息关键字（兜底，覆盖被二次包装成 RuntimeError 的情况）
+#
+# 重要：这里只保留**传输层特有**的短语。此前包含 "timeout"、"网络" 等宽泛词，
+# 会把任何消息里恰好含这些字的 TypeError / KeyError / akshare 字段解析失败
+# 误判为「数据源不可用」，从而吞掉真正的代码 bug 且不记录 traceback。
+# 宁可漏判（当普通错误处理），也不要误判（掩盖 bug）。
 _NETWORK_MSG_MARKERS = (
     "connection aborted",
     "connection reset",
     "connection refused",
     "connection closed",
-    "remote end closed",
-    "remote host",
+    "remote end closed connection without response",
     "max retries exceeded",
     "unable to connect to proxy",
     "proxyerror",
@@ -53,21 +57,23 @@ _NETWORK_MSG_MARKERS = (
     "name or service not known",
     "network is unreachable",
     "network is down",
-    "timed out",
-    "timeout",
-    "read operation timed out",
     "no route to host",
     "errno 10054",
     "errno 10060",
     "errno 10061",
     "errno 11001",
-    "无法连接",
-    "连接超时",
-    "网络",
+    "无法连接通达信行情服务器",
 )
 
 # 内置的网络类异常（不依赖第三方库即可判定）
-_BUILTIN_NETWORK_EXC = (ConnectionError, TimeoutError)
+#
+# 刻意**不包含** TimeoutError：
+# 在 Python 3.11+ 中 concurrent.futures.TimeoutError / asyncio.TimeoutError
+# 都是内置 TimeoutError 的别名，而它们表示的是「任务超时」（如回测超时、
+# 等待回测锁超时），与网络无关。若一并判定，会把这类超时误报成
+# 「数据源不可用」，掩盖真实的超时原因。
+# requests 的各类超时（ConnectTimeout / ReadTimeout）由下面的类名匹配覆盖。
+_BUILTIN_NETWORK_EXC = (ConnectionError,)
 
 
 def is_network_error(exc: BaseException) -> bool:

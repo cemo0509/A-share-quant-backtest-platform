@@ -191,8 +191,11 @@ def run_backtest(
     if hasattr(strat.analyzers, "traderecord"):
         trades = strat.analyzers.traderecord.trades
 
-    # 7. 计算指标（依赖上面提取的 trades）
-    metrics = compute_metrics(cerebro, result, trades_list=trades)
+    # 7. 计算指标（依赖上面提取的 trades 与资金曲线，
+    #    资金曲线用于波动率/Sortino/回撤修复期等扩展风险指标）
+    metrics = compute_metrics(
+        cerebro, result, trades_list=trades, equity_curve=equity_curve
+    )
 
     # 9. K 线数据（前端展示用）
     kline = df.assign(date=df["date"].dt.strftime("%Y-%m-%d")).to_dict("records")

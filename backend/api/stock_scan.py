@@ -51,6 +51,9 @@ _CANCEL_EVENTS_LOCK = threading.Lock()
 # 部分 C 扩展），多线程同时 run() 在资源紧张时可能导致进程级崩溃。
 # 用一把全局锁把 run_backtest 串行化，避免进程被杀后扫描结果（内存）丢失。
 _BT_RUN_LOCK = threading.Lock()
+# 等待回测锁的超时时间。超时后跳过该标的而不是无限排队，
+# 避免僵尸线程持锁导致整轮扫描假死（Python 无法从外部终止线程）。
+_BT_LOCK_TIMEOUT = 30.0
 
 # 扫描结果持久化文件：进程崩溃/重启后仍能找回结果，避免前端 404
 _SCAN_STORE_DIR = Path(__file__).resolve().parent.parent / "data" / "scan_results"
@@ -1039,21 +1042,34 @@ def _scan_inner(
 
     # 运行回测（加全局锁串行化 backtrader，防止并发 run() 触发进程级崩溃；
     # 同时 try 兜底，任何单只股票异常都不应冒泡杀掉扫描线程/进程）
+    #
+    # 关键：锁必须带超时。Python 无法从外部终止线程，超时后的僵尸线程会
+    # 一直持有 _BT_RUN_LOCK；若此处无限等待，后续所有扫描都会排队在僵尸
+    # 线程之后，界面表现为「扫描中…」永久假死。带超时后改为快速跳过。
+    acquired = _BT_RUN_LOCK.acquire(timeout=_BT_LOCK_TIMEOUT)
+    if not acquired:
+        logger.warning(
+            f"等待回测锁超时({_BT_LOCK_TIMEOUT}s)，跳过 {symbol} "
+            f"（可能有前一次超时的回测线程仍在执行）"
+        )
+        return None
+
     try:
-        with _BT_RUN_LOCK:
-            bt_result = run_backtest(
-                strategy_cls=strategy_cls,
-                symbol=code,
-                start_date=start_date,
-                end_date=end_date,
-                params=params,
-                cash=1000000,
-                commission=0.0003,
-                period="daily",
-            )
+        bt_result = run_backtest(
+            strategy_cls=strategy_cls,
+            symbol=code,
+            start_date=start_date,
+            end_date=end_date,
+            params=params,
+            cash=1000000,
+            commission=0.0003,
+            period="daily",
+        )
     except Exception as e:
         logger.debug(f"回测 {symbol} 异常: {e}")
         return None
+    finally:
+        _BT_RUN_LOCK.release()
 
     # 关键防护：模拟数据（网络失败时的随机兜底数据）绝不能产生选股信号。
     # 否则弱网/离线时，随机游走生成的假K线会被策略判定为「有买入信号」，
