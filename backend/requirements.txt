@@ -1,10 +1,24 @@
-fastapi
-uvicorn[standard]
-pydantic
-backtrader
-akshare
-pytdx
-pandas
-numpy
-pyarrow
-requests
+# A 股量化回测平台 —— Python 依赖
+#
+# 版本约束策略：
+# - 下界 = 本项目实际验证通过的版本，低于此版本可能行为不一致
+# - 上界 = 下一个可能含破坏性变更的大版本，避免自动升级踩坑
+#
+# 关键约束说明：
+# - pandas >= 2.0：模拟数据标记（is_mock）依赖 pandas 对 DataFrame.attrs
+#   的 parquet 序列化支持。已在 pandas 3.0.3 上验证通过。
+#   （即便该标记在旧版丢失，模拟数据也已禁止落盘，不会污染缓存，
+#     最坏情况仅为当次回测的来源标记不准。）
+# - backtrader 无 PyPI 版本规范，固定已验证的 1.9.78.123
+# - akshare 为行情数据源，升级频繁且接口会变，建议下界宽松但不要过旧
+
+fastapi>=0.139.0,<1.0.0
+uvicorn[standard]>=0.30.0,<1.0.0
+pydantic>=2.9.0,<3.0.0
+backtrader>=1.9.78.123
+akshare>=1.12.0
+pytdx>=1.72
+pandas>=2.0.0,<4.0.0
+numpy>=1.26.0,<3.0.0
+pyarrow>=14.0.0
+requests>=2.31.0,<3.0.0

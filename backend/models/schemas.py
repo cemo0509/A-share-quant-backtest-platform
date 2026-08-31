@@ -57,6 +57,7 @@ class BacktestRequest(BaseModel):
     commission: float = Field(0.0003, ge=0, le=0.1, description="佣金费率")
     slippage: float = Field(0.001, ge=0, le=0.1, description="滑点")
     period: str = Field("daily", description="K线周期")
+    adjust: str = Field("qfq", description="复权方式: qfq前复权 / hfq后复权 / (空)不复权")
 
     @field_validator('start_date', 'end_date')
     @classmethod
@@ -74,6 +75,15 @@ class BacktestRequest(BaseModel):
             raise ValueError(f'股票代码必须为6位数字，当前值: {v}')
         return v
 
+    @field_validator('adjust')
+    @classmethod
+    def validate_adjust(cls, v: str) -> str:
+        """复权方式仅允许 qfq / hfq / 空字符串（不复权）。"""
+        v = (v or "").strip().lower()
+        if v not in ("qfq", "hfq", ""):
+            raise ValueError(f'复权方式必须为 qfq / hfq / 空（不复权），当前值: {v}')
+        return v
+
 
 class BacktestCodeRequest(BaseModel):
     """自定义代码回测请求。"""
@@ -85,6 +95,7 @@ class BacktestCodeRequest(BaseModel):
     commission: float = Field(0.0003, ge=0, le=0.1, description="佣金费率")
     slippage: float = Field(0.001, ge=0, le=0.1, description="滑点")
     period: str = Field("daily", description="K线周期")
+    adjust: str = Field("qfq", description="复权方式: qfq前复权 / hfq后复权 / (空)不复权")
 
     @field_validator('start_date', 'end_date')
     @classmethod
@@ -113,6 +124,7 @@ class CompareRequest(BaseModel):
     commission: float = Field(0.0003, ge=0, le=0.1, description="佣金费率")
     slippage: float = Field(0.001, ge=0, le=0.1, description="滑点")
     period: str = Field("daily", description="K线周期")
+    adjust: str = Field("qfq", description="复权方式: qfq前复权 / hfq后复权 / (空)不复权")
 
     @field_validator('start_date', 'end_date')
     @classmethod

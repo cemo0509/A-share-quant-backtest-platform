@@ -82,6 +82,27 @@ class MomentumStrategy(bt.Strategy):
         
         self.order = None
     
+    def _momentum_pct(self) -> float:
+        """动量收益率（小数，如 0.0526 表示 5.26%）。
+
+        backtrader 的 ``Momentum`` 指标 = ``close[0] - close[-period]``，
+        单位是**价格差（元）**，不是百分比。此前代码用 ``momentum / 100``
+        与 0.02（2%）阈值比较：股价 10 元、20 日涨 0.5 元时得 0.005，
+        远小于 0.02，导致买入信号几乎永不触发。
+
+        正确算法是相对 N 日前收盘价的收益率。
+        """
+        try:
+            period = int(self.params.momentum_period)
+            if period <= 0 or len(self.data) <= period:
+                return 0.0
+            prev_close = self.data.close[-period]
+            if prev_close and prev_close > 0:
+                return (self.data.close[0] - prev_close) / prev_close
+        except Exception:
+            pass
+        return 0.0
+
     def next(self):
         """每个K线执行一次"""
         # 如果有未完成的订单，不执行
@@ -100,8 +121,9 @@ class MomentumStrategy(bt.Strategy):
             # 1. 动量 > 阈值（上涨动能）
             # 2. 价格在均线上方（确认上升趋势）
             # 3. 动量加速度 > 0（动能增强）
-            
-            momentum_buy = self.momentum[0] / 100 > self.params.momentum_threshold
+
+            momentum_pct = self._momentum_pct()
+            momentum_buy = momentum_pct > self.params.momentum_threshold
             trend_buy = self.data.close[0] > self.ma[0]
             # 动能增强：当前动量大于上一根动量（环比上升），安全无除零风险
             if self._prev_momentum is None:
@@ -120,7 +142,7 @@ class MomentumStrategy(bt.Strategy):
                 if size >= 100 and cash > position_value:
                     self.order = self.buy(size=size)
                     if self.params.printlog:
-                        self.log(f'买入信号: 动量={self.momentum[0]:.2f}%, 趋势=上升')
+                        self.log(f'买入信号: 动量={momentum_pct:.2%}, 趋势=上升')
         
         # 如果有持仓
         else:
@@ -128,9 +150,10 @@ class MomentumStrategy(bt.Strategy):
             sell_reason = ""
             
             # 卖出信号1：动量 < -阈值（下跌动能）
-            if self.momentum[0] / 100 < -self.params.momentum_threshold:
+            momentum_pct = self._momentum_pct()
+            if momentum_pct < -self.params.momentum_threshold:
                 sell_signal = True
-                sell_reason = f"动量转负 {self.momentum[0]:.2f}%"
+                sell_reason = f"动量转负 {momentum_pct:.2%}"
             
             # 卖出信号2：价格跌破均线（趋势反转）
             elif self.data.close[0] < self.ma[0]:

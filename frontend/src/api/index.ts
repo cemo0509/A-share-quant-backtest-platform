@@ -56,6 +56,8 @@ export interface BacktestReq {
   commission?: number
   slippage?: number
   period?: string
+  /** 复权方式：qfq 前复权 / hfq 后复权 / '' 不复权 */
+  adjust?: string
 }
 
 export interface BacktestResult {

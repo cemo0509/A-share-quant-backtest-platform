@@ -60,6 +60,7 @@ export default function Backtest() {
         cash: values.cash,
         commission: values.commission,
         slippage: values.slippage,
+        adjust: values.adjust,
       }
       setLoading(true)
       const res = await runBacktest(req)
@@ -87,6 +88,7 @@ export default function Backtest() {
             cash: 1000000,
             commission: 0.0003,
             slippage: 0.001,
+            adjust: 'qfq',
           }}
         >
           <Row gutter={16}>
@@ -113,6 +115,17 @@ export default function Backtest() {
             <Col span={3}>
               <Form.Item label="滑点" name="slippage">
                 <InputNumber style={{ width: '100%' }} step={0.001} min={0} />
+              </Form.Item>
+            </Col>
+            <Col span={3}>
+              <Form.Item label="复权方式" name="adjust" tooltip="前复权：以最新价为基准调整历史价（推荐）；后复权：以上市价为基准；不复权：原始价格">
+                <Select
+                  options={[
+                    { value: 'qfq', label: '前复权' },
+                    { value: 'hfq', label: '后复权' },
+                    { value: '', label: '不复权' },
+                  ]}
+                />
               </Form.Item>
             </Col>
           </Row>

@@ -30,6 +30,7 @@ def run(req: BacktestRequest):
             commission=req.commission,
             slippage=req.slippage,
             period=req.period,
+            adjust=req.adjust,
         )
         logger.info("回测成功完成")
         return {"status": "ok", "data": result}
@@ -59,6 +60,7 @@ def run_code(req: BacktestCodeRequest):
             commission=req.commission,
             slippage=req.slippage,
             period=req.period,
+            adjust=req.adjust,
         )
         logger.info("自定义代码回测成功完成")
         return {"status": "ok", "data": result}
@@ -107,6 +109,7 @@ def compare_strategies(req: CompareRequest):
                     commission=req.commission,
                     slippage=req.slippage,
                     period=req.period,
+                    adjust=req.adjust,
                 )
                 result = future.result(timeout=SINGLE_TIMEOUT)
                 results.append({

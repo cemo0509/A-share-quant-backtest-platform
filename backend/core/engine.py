@@ -49,6 +49,7 @@ def run_backtest(
     commission: float = 0.0003,
     slippage: float = 0.001,
     period: str = "daily",
+    adjust: str = "qfq",
     strategy_cls: Optional[Any] = None,
 ) -> dict:
     """执行回测。
@@ -64,6 +65,7 @@ def run_backtest(
         commission: 佣金费率（单边）
         slippage: 滑点
         period: K线周期
+        adjust: 复权方式 "qfq"前复权 / "hfq"后复权 / ""不复权
 
     Returns:
         BacktestResult.to_dict()
@@ -78,8 +80,8 @@ def run_backtest(
     # 统一处理 symbol 前缀：去除 sh/sz 前缀（data_loader 需要纯数字代码）
     symbol = str(symbol).lower().replace('sh', '').replace('sz', '').strip()
 
-    # 1. 获取数据
-    df = fetch_kline(symbol, start_date, end_date, period=period)
+    # 1. 获取数据（复权方式透传，此前恒为 qfq，用户无法对比不同复权口径）
+    df = fetch_kline(symbol, start_date, end_date, period=period, adjust=adjust)
     if df.empty:
         raise ValueError("无法获取该股票在指定日期范围内的行情数据，请检查股票代码和日期")
 
