@@ -16,6 +16,8 @@ export default function Optimize() {
   const [paramGridText, setParamGridText] = useState<string>('')
   const [results, setResults] = useState<OptimizeResultItem[]>([])
   const [bestParams, setBestParams] = useState<Record<string, number> | null>(null)
+  // 样本外验证结果（P0-8）
+  const [validation, setValidation] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [metricOptions, setMetricOptions] = useState<{ key: string; name: string }[]>([])
   const [form] = Form.useForm()
@@ -94,6 +96,8 @@ export default function Optimize() {
       const resultsList = responseData.data || []
       setResults(resultsList)
       setBestParams(responseData.best_params || null)
+      // 样本外验证结果（P0-8 过拟合防护）
+      setValidation(responseData.validation || null)
 
       if (resultsList.length) {
         message.success(`优化完成，共 ${resultsList.length} 组参数`)
@@ -216,6 +220,85 @@ export default function Optimize() {
               <Tag color="green" key={k}>{k} = {v}</Tag>
             ))}
           </Space>
+        </Card>
+      )}
+
+      {/* 样本外验证（P0-8 过拟合防护）：
+          网格搜索总能找到一组历史最优，但那大概率是过拟合。
+          这里把样本内/样本外表现并列，衰减严重时高亮告警。 */}
+      {validation && (
+        <Card title="样本外验证（过拟合检测）" style={{ marginTop: 16 }} size="small">
+          {!validation.enabled ? (
+            <Alert
+              type="info"
+              showIcon
+              message="未执行样本外验证"
+              description={validation.reason || '数据量不足或切分失败'}
+            />
+          ) : (
+            <>
+              <Alert
+                type={
+                  validation.warning_level === 'danger' ? 'error'
+                    : validation.warning_level === 'warn' ? 'warning' : 'success'
+                }
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={
+                  validation.overfit_warning
+                    ? `检测到过拟合风险（${validation.warning_level === 'danger' ? '严重' : '警告'}）`
+                    : '未检测到明显过拟合'
+                }
+                description={validation.warning_message}
+              />
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Card size="small" title="样本内（用于调参）">
+                    <div><Text type="secondary">区间：</Text>{validation.train_range}</div>
+                    <div>总收益：<Text strong>{validation.in_sample?.total_return?.toFixed(2)}%</Text></div>
+                    <div>年化：{validation.in_sample?.annual_return?.toFixed(2)}%</div>
+                    <div>夏普：{validation.in_sample?.sharpe_ratio ?? '—'}</div>
+                    <div>回撤：{validation.in_sample?.max_drawdown?.toFixed(2)}%</div>
+                  </Card>
+                </Col>
+                <Col span={8}>
+                  <Card size="small" title="样本外（未参与调参）">
+                    <div><Text type="secondary">区间：</Text>{validation.test_range}</div>
+                    <div>总收益：<Text strong>{validation.out_sample?.total_return?.toFixed(2)}%</Text></div>
+                    <div>年化：{validation.out_sample?.annual_return?.toFixed(2)}%</div>
+                    <div>夏普：{validation.out_sample?.sharpe_ratio ?? '—'}</div>
+                    <div>回撤：{validation.out_sample?.max_drawdown?.toFixed(2)}%</div>
+                  </Card>
+                </Col>
+                <Col span={8}>
+                  <Card size="small" title="保持率（样本外/样本内）">
+                    {(() => {
+                      const r = validation.retention || {}
+                      const pct = (v: any) => (v === null || v === undefined ? '—' : `${(v * 100).toFixed(1)}%`)
+                      return (
+                        <>
+                          <div>收益保持：<Text strong>{pct(r.total_return)}</Text></div>
+                          <div>年化保持：{pct(r.annual_return)}</div>
+                          <div>夏普保持：{pct(r.sharpe_ratio)}</div>
+                          <div style={{ marginTop: 8 }}>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              保持率低于 60% 提示衰减，低于 30% 判定为严重过拟合
+                            </Text>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </Card>
+                </Col>
+              </Row>
+              <div style={{ marginTop: 8 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  切分方式：按时间顺序前 {Math.round((validation.train_ratio ?? 0.7) * 100)}% 用于调参，
+                  后 {100 - Math.round((validation.train_ratio ?? 0.7) * 100)}% 完全不参与调参，仅用于检验。
+                </Text>
+              </div>
+            </>
+          )}
         </Card>
       )}
 

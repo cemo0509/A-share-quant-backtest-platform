@@ -197,12 +197,36 @@ class OptimizeResultItem(BaseModel):
     total_trades: int
 
 
+class OutSampleValidation(BaseModel):
+    """样本外验证结果（P0-8 过拟合防护）。
+
+    网格搜索 2000 组参数必然能找到一组历史最优，但那大概率是过拟合。
+    本结构把「样本内表现」与「样本外表现」并列，让过拟合无所遁形。
+    """
+    enabled: bool = Field(False, description="是否执行了样本外验证")
+    reason: Optional[str] = Field(None, description="未执行验证的原因")
+    train_ratio: float = Field(0.7, description="样本内占比")
+    split_date: Optional[str] = Field(None, description="切分日期 YYYYMMDD")
+    train_range: Optional[str] = Field(None, description="样本内区间")
+    test_range: Optional[str] = Field(None, description="样本外区间")
+    # 最优参数在两段区间上的表现
+    in_sample: Optional[dict[str, Any]] = Field(None, description="样本内指标")
+    out_sample: Optional[dict[str, Any]] = Field(None, description="样本外指标")
+    # 关键指标的保持率（样本外 / 样本内）
+    retention: Optional[dict[str, Any]] = Field(None, description="指标保持率")
+    overfit_warning: bool = Field(False, description="是否存在过拟合风险")
+    warning_level: str = Field("none", description="none / warn / danger")
+    warning_message: Optional[str] = Field(None, description="告警说明")
+
+
 class OptimizeResponse(BaseModel):
     """参数优化响应。"""
     status: str = "ok"
     data: list[OptimizeResultItem]
     best_params: Optional[dict[str, Any]] = None
     best_metric_value: Optional[float] = None
+    # 样本外验证（P0-8）
+    validation: Optional[OutSampleValidation] = None
 
 
 # ==================== 交易 ====================
