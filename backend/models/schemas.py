@@ -58,6 +58,26 @@ class BacktestRequest(BaseModel):
     slippage: float = Field(0.001, ge=0, le=0.1, description="滑点")
     period: str = Field("daily", description="K线周期")
     adjust: str = Field("qfq", description="复权方式: qfq前复权 / hfq后复权 / (空)不复权")
+    # 仓位管理（接入 core.position_sizer）
+    position_sizing: str = Field(
+        "allin",
+        description="仓位管理模式: allin满仓 / fixed固定比例 / atr风险仓位 / volatility目标波动率",
+    )
+    position_percent: float = Field(95.0, ge=1, le=100, description="基础仓位百分比")
+    max_position: float = Field(0.95, gt=0, le=1, description="仓位上限(0-1)")
+    risk_percent: float = Field(0.01, gt=0, le=0.5, description="atr模式单笔风险比例")
+    atr_multiplier: float = Field(2.0, gt=0, le=10, description="atr模式的ATR乘数")
+    target_volatility: float = Field(0.15, gt=0, le=2, description="volatility模式目标年化波动率")
+
+    @field_validator('position_sizing')
+    @classmethod
+    def validate_position_sizing(cls, v: str) -> str:
+        """仓位模式白名单校验，避免传入未知模式后静默退化。"""
+        allowed = ("allin", "fixed", "atr", "volatility")
+        v = (v or "allin").strip().lower()
+        if v not in allowed:
+            raise ValueError(f'仓位管理模式必须为 {"/".join(allowed)}，当前值: {v}')
+        return v
 
     @field_validator('start_date', 'end_date')
     @classmethod

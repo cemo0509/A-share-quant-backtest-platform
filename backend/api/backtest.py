@@ -31,6 +31,12 @@ def run(req: BacktestRequest):
             slippage=req.slippage,
             period=req.period,
             adjust=req.adjust,
+            position_sizing=req.position_sizing,
+            position_percent=req.position_percent,
+            max_position=req.max_position,
+            risk_percent=req.risk_percent,
+            atr_multiplier=req.atr_multiplier,
+            target_volatility=req.target_volatility,
         )
         logger.info("回测成功完成")
         return {"status": "ok", "data": result}

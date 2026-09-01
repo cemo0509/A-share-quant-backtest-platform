@@ -49,7 +49,9 @@ class SmartExitStrategy(BaseStrategy):
         self.entry_price = 0.0
         self.entry_date = None
         self.peak_price = 0.0
-        
+        # 持仓期间的价格序列（ExitRules 的 Dead Drift 检查需要）
+        self.prices: list[float] = []
+
     def next(self):
         if self.order:
             return
@@ -83,49 +85,33 @@ class SmartExitStrategy(BaseStrategy):
                     self.log("信号退出：死叉")
                 self.order = self.sell(size=self.position.size)
                 return
-            
-            # 检查多种退出机制（简化版，不依赖ExitRules）
-            current_date = self.data.datetime.date(0)
-            
-            # 计算当前盈利
-            profit_pct = (current_price - self.entry_price) / self.entry_price
-            
-            # 1. 追踪止损检查（盈利超过激活阈值后激活）
-            if profit_pct >= self.params.trailing_activate and self.peak_price > 0:
-                drawdown = (self.peak_price - current_price) / self.peak_price
-                if drawdown > self.params.trailing_stop_pct / 100:
-                    if self.params.printlog:
-                        self.log(f"触发追踪止损: 回撤{drawdown:.2%}")
-                    self.order = self.sell(size=self.position.size)
-                    return
-            
-            # 2. 止盈检查
-            if profit_pct > self.params.profit_target:
+
+            # 多种退出机制：统一走 core.exit_rules.ExitRules。
+            #
+            # 此前这里手写了 4 段重复逻辑，且与已存在的 ExitRules 模块重复，
+            # 而 self.exit_rules 虽被实例化却从未调用（注释自承「简化版」）。
+            # 更糟的是手写版硬止损漏了 /100，导致硬止损从未生效。
+            # 现在统一委托给 ExitRules，消除重复并复用经过验证的实现。
+            self.prices.append(current_price)
+
+            should_exit, reason = self.exit_rules.should_exit(
+                entry_price=self.entry_price,
+                peak_price=self.peak_price,
+                current_price=current_price,
+                entry_date=self.entry_date,
+                current_date=self.data.datetime.date(0),
+                prices=self.prices,
+                trailing_stop_pct=self.params.trailing_stop_pct,
+                time_exit_days=self.params.time_exit_days,
+                hard_stop_pct=self.params.hard_stop_pct,
+                profit_target=self.params.profit_target,
+            )
+
+            if should_exit:
                 if self.params.printlog:
-                    self.log(f"触发止盈: 盈利{profit_pct:.2%}")
+                    self.log(f"触发退出: {reason}")
                 self.order = self.sell(size=self.position.size)
                 return
-            
-            # 3. 硬止损检查（无论是否盈利都检查）
-            # hard_stop_pct 是百分比（12.0 表示 12%），必须 /100 转成小数。
-            # 此前漏了 /100，导致 1-12.0 = -11.0，止损价 = -11 × 成本价，
-            # current_price < 负数 恒为 False → 硬止损从未触发过。
-            if self.entry_price > 0 and self.params.hard_stop_pct > 0:
-                hard_stop_price = self.entry_price * (1 - self.params.hard_stop_pct / 100)
-                if current_price < hard_stop_price:
-                    if self.params.printlog:
-                        self.log("触发硬止损")
-                    self.order = self.sell(size=self.position.size)
-                    return
-            
-            # 4. 时间退出检查
-            if self.entry_date and self.params.time_exit_days > 0:
-                days_held = (current_date - self.entry_date).days
-                if days_held > self.params.time_exit_days:
-                    if self.params.printlog:
-                        self.log("触发时间退出")
-                    self.order = self.sell(size=self.position.size)
-                    return
     
     def notify_order(self, order):
         """订单状态通知。"""

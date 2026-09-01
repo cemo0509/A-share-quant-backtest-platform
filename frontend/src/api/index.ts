@@ -60,7 +60,28 @@ export interface BacktestReq {
   period?: string
   /** 复权方式：qfq 前复权 / hfq 后复权 / '' 不复权 */
   adjust?: string
+  // ---- 仓位管理（接入 core.position_sizer）----
+  /** allin 满仓 / fixed 固定比例 / atr 风险仓位 / volatility 目标波动率 */
+  position_sizing?: string
+  /** 基础仓位百分比（allin/fixed/volatility 用） */
+  position_percent?: number
+  /** 仓位上限 0-1 */
+  max_position?: number
+  /** atr 模式单笔风险比例 */
+  risk_percent?: number
+  /** atr 模式 ATR 乘数 */
+  atr_multiplier?: number
+  /** volatility 模式目标年化波动率 */
+  target_volatility?: number
 }
+
+/** 仓位管理模式选项（与后端 BacktestRequest 校验白名单一致） */
+export const POSITION_SIZING_OPTIONS = [
+  { value: 'allin', label: '满仓（默认）', desc: '用可用资金的指定百分比建仓' },
+  { value: 'fixed', label: '固定比例', desc: '每次按固定百分比资金建仓' },
+  { value: 'atr', label: 'ATR 风险仓位', desc: '单笔亏损不超过资金的风险比例' },
+  { value: 'volatility', label: '目标波动率', desc: '波动越大仓位越小，反向调节' },
+]
 
 export interface BacktestResult {
   total_return: number

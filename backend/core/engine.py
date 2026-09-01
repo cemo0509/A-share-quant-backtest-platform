@@ -17,6 +17,7 @@ from core.data_loader import fetch_kline
 from core.strategies.registry import get_strategy
 from core.analyzers import compute_metrics, BacktestMetrics
 from core.utils import safe_convert
+from core.position_sizer import calc_atr_position, calc_volatility_position
 
 logger = logging.getLogger("engine")
 
@@ -50,6 +51,12 @@ def run_backtest(
     slippage: float = 0.001,
     period: str = "daily",
     adjust: str = "qfq",
+    position_sizing: str = "allin",
+    position_percent: float = 95.0,
+    max_position: float = 0.95,
+    risk_percent: float = 0.01,
+    atr_multiplier: float = 2.0,
+    target_volatility: float = 0.15,
     strategy_cls: Optional[Any] = None,
 ) -> dict:
     """执行回测。
@@ -66,6 +73,16 @@ def run_backtest(
         slippage: 滑点
         period: K线周期
         adjust: 复权方式 "qfq"前复权 / "hfq"后复权 / ""不复权
+        position_sizing: 仓位管理模式
+            - "allin"      ：满仓（用 position_percent% 资金，默认 95%）
+            - "fixed"      ：固定比例（用 position_percent% 资金）
+            - "atr"        ：ATR 风险仓位（单笔风险不超过 risk_percent）
+            - "volatility" ：目标波动率仓位（波动越大仓位越小）
+        position_percent: allin/fixed/volatility 的基础仓位百分比
+        max_position: 仓位上限（0-1）
+        risk_percent: atr 模式的单笔风险比例（默认 1%）
+        atr_multiplier: atr 模式的 ATR 乘数（默认 2 倍）
+        target_volatility: volatility 模式的目标年化波动率（默认 0.15）
 
     Returns:
         BacktestResult.to_dict()
@@ -111,10 +128,19 @@ def run_backtest(
     # 滑点：固定百分比
     cerebro.broker.set_slippage_perc(slippage)
 
-    # 仓位管理：默认买入时用可用资金的 95% 建仓（整百股），卖出时清仓。
+    # 仓位管理：支持多种模式（默认 allin 保持与历史行为一致）。
     # 若不设置 sizer，backtrader 默认每次只交易 1 股，导致回测资金几乎不动、
     # 收益率恒为 0、交易金额异常（这正是“交易情况不对”的根因）。
-    cerebro.addsizer(_AllInSizer, percents=95, slippage=slippage)
+    cerebro.addsizer(
+        _PositionSizerAdapter,
+        mode=position_sizing,
+        percent=position_percent,
+        max_position=max_position,
+        risk_percent=risk_percent,
+        atr_multiplier=atr_multiplier,
+        target_volatility=target_volatility,
+        slippage=slippage,
+    )
 
     # 4. 添加策略（注入参数）
     bt_params = {**params}
@@ -272,6 +298,137 @@ class _AStockCommissionInfo(bt.CommInfoBase):
         if size < 0:
             cost += turnover * self.p.stamp_duty
         return cost
+
+
+class _PositionSizerAdapter(bt.Sizer):
+    """仓位管理适配器：把 core.position_sizer 的能力接入回测引擎。
+
+    此前 ``position_sizer.py`` 已实现 Kelly / ATR / 目标波动率等仓位算法，
+    但引擎从未引用（孤岛代码），所有策略都被迫使用「满仓 95%」一种模式。
+    这里把它们统一接入，通过 ``position_sizing`` 参数切换。
+
+    支持的模式：
+      - ``allin``      满仓（等价旧的 _AllInSizer，保持默认行为不变）
+      - ``fixed``      固定比例建仓
+      - ``atr``        ATR 风险仓位：单笔亏损不超过 risk_percent
+      - ``volatility`` 目标波动率：波动越大仓位越小
+
+    所有模式最终结果都会取整到 100 股（A 股 1 手）。
+    """
+
+    params = (
+        ("mode", "allin"),
+        ("percent", 95.0),
+        ("max_position", 0.95),
+        ("risk_percent", 0.01),
+        ("atr_multiplier", 2.0),
+        ("target_volatility", 0.15),
+        ("slippage", 0.001),
+    )
+
+    def _getsizing(self, comminfo, cash, data, isbuy):
+        if not isbuy:
+            # 卖出：清掉全部持仓（允许零股）
+            return self.strategy.position.size
+
+        price = data.close[0] * (1 + self.p.slippage)
+        if price <= 0:
+            return 0
+
+        mode = (self.p.mode or "allin").lower()
+
+        try:
+            if mode == "atr":
+                shares = calc_atr_position(
+                    capital=cash,
+                    atr_value=self._atr(data),
+                    atr_multiplier=self.p.atr_multiplier,
+                    risk_percent=self.p.risk_percent,
+                    current_price=price,
+                )
+                return self._to_lots(shares, cash, price)
+
+            if mode == "volatility":
+                vol = self._annual_volatility(data)
+                ratio = calc_volatility_position(
+                    base_size=self.p.percent / 100.0,
+                    current_volatility=vol,
+                    target_volatility=self.p.target_volatility,
+                    max_position=self.p.max_position,
+                )
+                target_cash = cash * ratio
+            else:
+                # allin / fixed：按资金百分比建仓
+                target_cash = cash * self.p.percent / 100.0
+        except Exception:
+            # 任何计算异常都退化为满仓，避免回测直接失败
+            target_cash = cash * self.p.percent / 100.0
+
+        if target_cash <= 0:
+            return 0
+        return self._to_lots(int(target_cash / price), cash, price)
+
+    def _to_lots(self, shares: int, cash: float, price: float) -> int:
+        """取整到 100 股（A 股 1 手），并做资金/上限约束。"""
+        try:
+            size = int(shares) // 100 * 100
+            # 上限：不超过 max_position 比例的资金
+            max_shares = int(cash * float(self.p.max_position) / price) if price > 0 else 0
+            max_shares = max_shares // 100 * 100
+            if max_shares > 0:
+                size = min(size, max_shares)
+            if size <= 0 and cash >= price * 100:
+                size = 100  # 资金够一手时至少买一手
+            return max(size, 0)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _atr(data, period: int = 14) -> float:
+        """简易 ATR（平均真实波幅）。
+
+        直接用 data 的历史 high/low/close 计算，避免在 Sizer 里创建
+        backtrader 指标（Sizer 生命周期与指标不同步）。
+        """
+        try:
+            highs = list(data.high.get(size=period + 1))
+            lows = list(data.low.get(size=period + 1))
+            closes = list(data.close.get(size=period + 1))
+            n = min(len(highs), len(lows), len(closes))
+            if n < 2:
+                return 0.0
+            trs = []
+            for i in range(1, n):
+                prev_close = closes[i - 1]
+                tr = max(
+                    highs[i] - lows[i],
+                    abs(highs[i] - prev_close),
+                    abs(lows[i] - prev_close),
+                )
+                trs.append(tr)
+            return (sum(trs) / len(trs)) if trs else 0.0
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _annual_volatility(data, period: int = 20) -> float:
+        """年化波动率：日收益率标准差 × √252。"""
+        try:
+            closes = list(data.close.get(size=period + 1))
+            if len(closes) < 3:
+                return 0.0
+            rets = []
+            for i in range(1, len(closes)):
+                prev = closes[i - 1]
+                if prev > 0:
+                    rets.append(closes[i] / prev - 1)
+            if len(rets) < 2:
+                return 0.0
+            mean = sum(rets) / len(rets)
+            var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+            return (var ** 0.5) * (252 ** 0.5)
+        except Exception:
+            return 0.0
 
 
 class _AllInSizer(bt.Sizer):
