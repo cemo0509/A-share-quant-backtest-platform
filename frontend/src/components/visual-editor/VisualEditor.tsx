@@ -1,10 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { Space, Button, Input, message, Drawer, Typography, Empty, theme, Select, Modal, Tooltip } from 'antd'
-import { SaveOutlined, CodeOutlined, BulbOutlined, AppstoreOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
+import {
+  Space, Button, Input, message, Drawer, Typography, Empty, theme, Select, Modal, Tooltip,
+  Form, InputNumber, DatePicker, Alert,
+} from 'antd'
+import {
+  SaveOutlined, CodeOutlined, BulbOutlined, AppstoreOutlined, ThunderboltOutlined,
+} from '@ant-design/icons'
+import dayjs from 'dayjs'
 import GlobalSettingsBar from './GlobalSettingsBar'
 import IndicatorTree from './IndicatorTree'
 import ParameterPanel from './ParameterPanel'
 import ConditionPreview from './ConditionPreview'
+import {
+  codegenVisualRule, runVisualBacktest, saveCustomStrategy,
+} from '../../api'
+import { useStore } from '../../stores'
 import { VisualRule, ConditionLeaf, ConditionNode, ConditionGroup, VisualGlobal, createGroup, createLeaf, newId, applyPreset, updateNodeById, collectLeaves } from './types'
 import {
   getVisualIndicators, saveVisualRule, loadVisualRule,
@@ -34,6 +45,8 @@ function defaultGlobal(tree: VisualIndicatorTree): VisualGlobal {
 }
 
 export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }: Props) {
+  const navigate = useNavigate()
+  const { setResult } = useStore()
   const { token } = theme.useToken()
   const [tree, setTree] = useState<VisualIndicatorTree | null>(null)
   const [rule, setRule] = useState<VisualRule>(() => createGroup('AND'))
@@ -47,6 +60,12 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
   const [presets, setPresets] = useState<{ presets: Record<string, any>; names: Record<string, string> } | null>(null)
   const [presetKey, setPresetKey] = useState<string | undefined>(undefined)
   const autoFilledRef = useRef<Set<string>>(new Set())
+  // codegen：生成代码 / 立即回测
+  const [codeOpen, setCodeOpen] = useState(false)
+  const [codeText, setCodeText] = useState('')
+  const [codeLoading, setCodeLoading] = useState(false)
+  const [runOpen, setRunOpen] = useState(false)
+  const [runLoading, setRunLoading] = useState(false)
 
   useEffect(() => {
     getVisualIndicators()
@@ -153,6 +172,93 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
       message.error(e?.response?.data?.detail || '保存失败')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // ---- codegen：把可视化规则编译成 Backtrader 代码 ----
+  const handleCodegen = async () => {
+    if (emptyRule) { message.warning('请至少添加一个条件'); return }
+    const miss = findBetweenMissing(rule as any)
+    if (miss.length > 0) { message.warning(`「${miss[0]}」使用 between 区间，请同时填写下限和上限`); return }
+
+    setCodeLoading(true)
+    try {
+      const res = await codegenVisualRule({
+        rule, name: name || '可视化策略', description: desc, exit_mode: 'reverse',
+      })
+      const d = res.data?.data
+      if (res.data?.status === 'error' || !d?.valid) {
+        message.error(res.data?.detail || d?.error || '代码生成失败')
+        return
+      }
+      setCodeText(d.code || '')
+      setCodeOpen(true)
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '代码生成失败')
+    } finally {
+      setCodeLoading(false)
+    }
+  }
+
+  // 把生成的代码复制到剪贴板
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(codeText)
+      message.success('代码已复制')
+    } catch {
+      message.warning('复制失败，请手动选中复制')
+    }
+  }
+
+  // 把生成的代码保存为自定义策略（之后可在「回测」页直接选用）
+  const handleSaveAsCustom = async () => {
+    const key = (keyInput.trim() || ruleKey.trim() || 'visual_strategy').replace(/[^a-zA-Z0-9_-]/g, '_')
+    try {
+      await saveCustomStrategy(key, codeText)
+      message.success(`已保存为自定义策略「${key}」，可在回测页选择使用`)
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '保存为自定义策略失败')
+    }
+  }
+
+  // 立即回测：生成代码并执行，结果存入 store 后跳转到结果页
+  // 表单提交值：{ symbol, range: [dayjs, dayjs], cash }
+  const handleRunBacktest = async (vals: {
+    symbol: string
+    range?: [dayjs.Dayjs, dayjs.Dayjs]
+    cash: number
+  }) => {
+    if (emptyRule) { message.warning('请至少添加一个条件'); return }
+    if (!vals.range || vals.range.length !== 2) {
+      message.warning('请选择回测区间')
+      return
+    }
+    setRunLoading(true)
+    try {
+      const res = await runVisualBacktest({
+        rule,
+        name: name || '可视化策略',
+        description: desc,
+        exit_mode: 'reverse',
+        symbol: vals.symbol,
+        start_date: vals.range[0].format('YYYYMMDD'),
+        end_date: vals.range[1].format('YYYYMMDD'),
+        cash: vals.cash,
+        commission: 0.0003,
+        slippage: 0.001,
+        period: 'daily',
+        adjust: 'qfq',
+      })
+      const data = res.data?.data
+      if (!data) { message.error('回测未返回结果'); return }
+      setResult(data)
+      setRunOpen(false)
+      message.success('可视化策略回测完成')
+      navigate('/results')
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '回测失败')
+    } finally {
+      setRunLoading(false)
     }
   }
 
@@ -311,7 +417,13 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
             </Tooltip>
           )}
           <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存策略</Button>
-          <Button size="small" icon={<CodeOutlined />} onClick={() => setJsonOpen(true)}>JSON 预览</Button>
+          <Tooltip title="把当前条件编译成 Backtrader 策略代码">
+            <Button size="small" icon={<CodeOutlined />} loading={codeLoading} onClick={handleCodegen}>生成代码</Button>
+          </Tooltip>
+          <Tooltip title="用当前条件立即跑一次回测">
+            <Button size="small" icon={<ThunderboltOutlined />} onClick={() => setRunOpen(true)}>立即回测</Button>
+          </Tooltip>
+          <Button size="small" icon={<AppstoreOutlined />} onClick={() => setJsonOpen(true)}>JSON 预览</Button>
           {loading && <Text type="secondary" style={{ fontSize: 12 }}>加载中…</Text>}
         </Space>
       </div>
@@ -368,6 +480,70 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
           {JSON.stringify(rule, null, 2)}
         </pre>
       </Drawer>
+
+      {/* 生成代码弹窗：可视化条件 → Backtrader 策略代码 */}
+      <Modal
+        title="生成的 Backtrader 策略代码"
+        open={codeOpen}
+        onCancel={() => setCodeOpen(false)}
+        width={760}
+        footer={
+          <Space>
+            <Button onClick={handleCopyCode}>复制代码</Button>
+            <Button onClick={handleSaveAsCustom}>保存为自定义策略</Button>
+            <Button type="primary" onClick={() => setCodeOpen(false)}>关闭</Button>
+          </Space>
+        }
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="代码由当前条件树自动生成"
+          description="「保存为自定义策略」后，可在「回测」页像其他策略一样直接选择使用；也可复制后在编程模式中二次修改。"
+        />
+        <pre style={{
+          fontSize: 12, background: token.colorBgElevated, padding: 12,
+          borderRadius: 6, overflow: 'auto', maxHeight: '55vh', margin: 0,
+        }}>
+          {codeText}
+        </pre>
+      </Modal>
+
+      {/* 立即回测弹窗 */}
+      <Modal
+        title="用当前条件立即回测"
+        open={runOpen}
+        onCancel={() => setRunOpen(false)}
+        footer={null}
+        destroyOnClose
+      >
+        <Form
+          layout="vertical"
+          onFinish={handleRunBacktest}
+          initialValues={{
+            symbol: '000001',
+            range: [dayjs('2024-01-01'), dayjs('2025-06-30')],
+            cash: 1000000,
+          }}
+        >
+          <Form.Item label="股票代码" name="symbol" rules={[{ required: true, message: '请输入股票代码' }]}>
+            <Input placeholder="如 000001" />
+          </Form.Item>
+          <Form.Item label="回测区间" name="range" rules={[{ required: true, message: '请选择回测区间' }]}>
+            <DatePicker.RangePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="初始资金" name="cash">
+            <InputNumber style={{ width: '100%' }} min={10000} step={100000} />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Space>
+              <Button type="primary" htmlType="submit" loading={runLoading}>开始回测</Button>
+              <Button onClick={() => setRunOpen(false)}>取消</Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

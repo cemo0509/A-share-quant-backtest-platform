@@ -78,11 +78,41 @@ FORBIDDEN_PATTERNS = [
 ]
 
 
+# 允许策略代码导入的模块白名单（纯计算/数据处理，无系统副作用）
+_ALLOWED_IMPORT_MODULES = {
+    'backtrader', 'bt', 'math', 'cmath', 'numpy', 'np',
+    'pandas', 'pd', 'datetime', 'time', 'typing',
+    'collections', 'itertools', 'functools', 'operator',
+    'numbers', 'decimal', 'fractions', 'statistics', 'dataclasses',
+    'abc', 'enum', 'copy', 'json', 're', 'string',
+    '__future__',  # from __future__ import annotations 是标准写法
+}
+
+# 保存原始 __import__，供受限版本调用
+_ORIG_IMPORT = __builtins__['__import__'] if isinstance(__builtins__, dict) else getattr(
+    __builtins__, '__import__'
+)
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """受限的 __import__：只允许导入白名单模块。
+
+    此前沙箱完全移除了 __import__，导致任何带 import 语句的策略代码
+    （包括 ``import backtrader as bt``）在加载阶段就抛
+    ``ImportError: __import__ not found``。这里改为白名单放行。
+    """
+    root = (name or "").split(".")[0]
+    if root not in _ALLOWED_IMPORT_MODULES:
+        raise ImportError(f"策略代码不允许导入模块: {root}")
+    return _ORIG_IMPORT(name, globals, locals, fromlist, level)
+
+
 def _get_safe_builtins() -> dict:
     """返回受限的 builtins 环境，防止沙箱逃逸。
-    
+
     只暴露回测策略所需的安全内置函数和类型，
-    移除所有危险的函数如 eval/exec/open/__import__ 等。
+    移除所有危险的函数如 eval/exec/open 等。
+    保留白名单受限的 __import__，保证策略能正常使用 backtrader。
     """
     import builtins
     safe = {
@@ -121,6 +151,10 @@ def _get_safe_builtins() -> dict:
         'hash': hash, 'id': id, 'dir': dir, 'vars': vars,
         # super（策略类继承需要）
         'super': super,
+        # 受限 import（仅白名单模块，保证 import backtrader 可用）
+        '__import__': _safe_import,
+        # 定义类必需（策略类声明），否则 class 语句抛 NameError
+        '__build_class__': builtins.__build_class__,
         # 真值常量
         'True': True, 'False': False, 'None': None,
         # 错误信息
@@ -311,21 +345,23 @@ def load_custom_strategy_class(key: str) -> type[bt.Strategy]:
     _safe_builtins = _get_safe_builtins()
     module.__builtins__ = _safe_builtins
     sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-        
-        # 查找策略类
-        for attr_name in dir(module):
-            attr = getattr(module, attr_name)
-            if (isinstance(attr, type) and 
-                issubclass(attr, bt.Strategy) and 
+
+    # 注意：加载后不能从 sys.modules 移除模块——
+    # backtrader 的 metabase.donew() 实例化策略时会执行
+    # ``sys.modules[cls.__module__]``，若移除，
+    # 后续 cerebro 实例化该策略将抛 KeyError。
+    # 策略模块体积极小，常驻内存可接受。
+    spec.loader.exec_module(module)
+
+    # 查找策略类
+    for attr_name in dir(module):
+        attr = getattr(module, attr_name)
+        if (isinstance(attr, type) and
+                issubclass(attr, bt.Strategy) and
                 attr is not bt.Strategy):
-                return attr
-        
-        raise ValueError(f"策略文件中未找到有效的Backtrader策略类: {key}")
-    finally:
-        # 清理已注册模块，防止内存膨胀
-        sys.modules.pop(module_name, None)
+            return attr
+
+    raise ValueError(f"策略文件中未找到有效的Backtrader策略类: {key}")
 
 
 def _extract_strategy_info(code: str) -> dict:
@@ -397,11 +433,9 @@ def load_strategy_from_code(code: str) -> type[bt.Strategy]:
 
         raise ValueError("策略代码中未找到有效的 Backtrader 策略类（需继承 bt.Strategy）")
     finally:
-        # 清理临时文件和已注册模块
-        try:
-            sys.modules.pop(module_name, None)
-        except Exception:
-            pass
+        # 只清理临时文件。
+        # 不能 sys.modules.pop(module_name)：backtrader 实例化策略时会用
+        # sys.modules[cls.__module__]，提前移除会导致 run_backtest 抛 KeyError。
         try:
             os.unlink(temp_file)
         except OSError:

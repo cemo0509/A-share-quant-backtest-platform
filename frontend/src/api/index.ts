@@ -274,6 +274,34 @@ export interface VisualPresetsResponse {
 }
 export const getVisualPresets = () => api.get<{ data: VisualPresetsResponse }>('/visual/presets')
 
+// codegen：可视化规则 → Backtrader 代码（让编辑器形成「画完就能跑」的闭环）
+export interface VisualCodegenResponse {
+  code: string
+  lines: number
+  valid: boolean
+  error?: string | null
+}
+export const codegenVisualRule = (data: {
+  rule: any; name?: string; description?: string; exit_mode?: string
+}) => api.post('/visual/codegen', data)
+
+// 直接运行可视化策略回测（生成代码 → 动态加载 → 回测）
+export const runVisualBacktest = (data: {
+  rule: any
+  name?: string
+  description?: string
+  exit_mode?: string
+  symbol: string
+  start_date: string
+  end_date: string
+  params?: Record<string, any>
+  cash?: number
+  commission?: number
+  slippage?: number
+  period?: string
+  adjust?: string
+}) => api.post('/visual/run', data)
+
 // ===== 策略比较 =====
 export interface CompareRequest {
   strategies: string[]

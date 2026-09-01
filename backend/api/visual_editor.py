@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from core.visual_editor.indicators import get_indicator_tree
+from core.visual_editor.codegen import generate_and_validate, generate_strategy_code
 from core.visual_editor.store import (
     save_visual_rule,
     load_visual_rule,
@@ -31,6 +32,31 @@ class SaveVisualRequest(BaseModel):
     name: str
     description: str = ""
     rule: dict[str, Any] = Field(default_factory=dict)
+
+
+class CodegenRequest(BaseModel):
+    """生成策略代码请求（可视化规则 → Backtrader 代码）。"""
+    rule: dict[str, Any] = Field(default_factory=dict)
+    name: str = "可视化策略"
+    description: str = ""
+    exit_mode: str = "reverse"  # reverse=条件反向卖出 / hold=只买不卖
+
+
+class RunVisualRequest(BaseModel):
+    """直接运行可视化策略回测。"""
+    rule: dict[str, Any] = Field(default_factory=dict)
+    name: str = "可视化策略"
+    description: str = ""
+    exit_mode: str = "reverse"
+    symbol: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    params: dict = Field(default_factory=dict)
+    cash: float = 1_000_000
+    commission: float = 0.0003
+    slippage: float = 0.001
+    period: str = "daily"
+    adjust: str = "qfq"
 
 
 @router.get("/indicators")
@@ -95,3 +121,80 @@ def api_delete(key: str):
         return {"status": "ok", "message": "已删除"}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# ==================== codegen：可视化规则 → 可回测代码 ====================
+
+@router.post("/codegen")
+def api_codegen(req: CodegenRequest):
+    """把可视化规则树编译成 Backtrader 策略代码。
+
+    让可视化编辑器形成闭环：画完条件即可生成代码并回测，
+    而不是停在「保存了但跑不起来」的状态。
+    """
+    try:
+        result = generate_and_validate(
+            req.rule, name=req.name, description=req.description
+        )
+        if not result["valid"]:
+            return {
+                "status": "error",
+                "detail": result["error"] or "无法生成策略代码",
+                "data": {"code": result["code"]},
+            }
+        return {"status": "ok", "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"代码生成失败: {e}")
+
+
+@router.post("/run")
+def api_run_visual(req: RunVisualRequest):
+    """直接运行可视化策略回测（生成代码 → 动态加载 → 执行）。
+
+    复用自定义代码回测的路径：load_strategy_from_code() + run_backtest()。
+    """
+    from core.strategies.custom_manager import load_strategy_from_code
+    from core.engine import run_backtest
+
+    try:
+        # 1. 生成代码
+        gen = generate_and_validate(req.rule, name=req.name, description=req.description)
+        if not gen["valid"]:
+            raise HTTPException(
+                status_code=400,
+                detail=gen["error"] or "无法生成策略代码，请检查条件配置",
+            )
+
+        # 2. 动态加载策略类（含安全校验）
+        try:
+            strategy_cls = load_strategy_from_code(gen["code"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # 3. 执行回测
+        try:
+            result = run_backtest(
+                strategy_cls=strategy_cls,
+                symbol=req.symbol,
+                start_date=req.start_date,
+                end_date=req.end_date,
+                params=req.params,
+                cash=req.cash,
+                commission=req.commission,
+                slippage=req.slippage,
+                period=req.period,
+                adjust=req.adjust,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # 附带生成的代码，便于用户查看/复制到自定义策略
+        result["generated_code"] = gen["code"]
+        return {"status": "ok", "data": result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"可视化策略回测失败: {e}")
