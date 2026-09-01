@@ -371,6 +371,10 @@ class _AStockCommissionInfo(bt.CommInfoBase):
         ("transfer_fee", 0.00001),  # 过户费 0.001%，双边
         ("stocklike", True),
         ("commtype", bt.CommInfoBase.COMM_PERC),
+        # percabs=True：声明 commission 是绝对比例（0.0003 = 万 3）。
+        # 默认 False 时 backtrader 把 commission 当百分数再 ÷100，
+        # 导致实际佣金被低估 100 倍（10 万成交额应收 30 元实收 0.3 元）。
+        ("percabs", True),
     )
 
     def _getcommission(self, size, price, pseudoexec):
