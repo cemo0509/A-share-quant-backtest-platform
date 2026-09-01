@@ -2,6 +2,7 @@ import { Card, Empty, Typography, Button, Space, message, Alert } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import { useStore } from '../stores'
 import MetricsPanel from '../components/MetricsPanel'
+import BenchmarkPanel from '../components/BenchmarkPanel'
 import EquityCurve from '../components/EquityCurve'
 import KLineChart from '../components/KLineChart'
 import TradeTable from '../components/TradeTable'
@@ -77,10 +78,11 @@ export default function Results() {
         </Card>
       )}
       <MetricsPanel />
+      <BenchmarkPanel />
       <Card title="K线走势（买卖点标记）" style={{ marginTop: 16 }}>
         <KLineChart />
       </Card>
-      <Card title="资金曲线" style={{ marginTop: 16 }}>
+      <Card title="资金曲线（含基准对比）" style={{ marginTop: 16 }}>
         <EquityCurve />
       </Card>
       <Card title="交易明细" style={{ marginTop: 16 }}>

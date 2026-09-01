@@ -32,6 +32,31 @@ export interface TradeRecord {
   pnl?: number
 }
 
+/** 单条基准（买入持有 / 沪深300） */
+export interface BenchmarkItem {
+  name: string
+  key: string
+  total_return: number
+  annual_return: number
+  max_drawdown: number
+  shares: number
+  entry_price: number
+  exit_price: number
+  equity_curve?: Array<{ date: string; value: number }>
+}
+
+/** 基准对比结果（P0-10） */
+export interface Benchmarks {
+  /** 同一标的买入持有，数据不足时为 null */
+  buy_hold: BenchmarkItem | null
+  /** 沪深300 同期，网络不可用时为 null */
+  hs300: BenchmarkItem | null
+  /** 策略 − 买入持有（百分点） */
+  excess_vs_buy_hold: number | null
+  /** 策略 − 沪深300（百分点） */
+  excess_vs_hs300: number | null
+}
+
 export interface EquityPoint {
   date: string
   value: number
@@ -54,6 +79,8 @@ export interface BacktestResultData {
   start_cash: number
   end_cash: number
   data_source?: 'real' | 'mock'
+  /** 基准对比（P0-10）：买入持有 + 沪深300 + 超额收益 */
+  benchmarks?: Benchmarks
 }
 
 // 主题模式：'dark' | 'light' | 'system'（跟随系统）。持久化到 localStorage

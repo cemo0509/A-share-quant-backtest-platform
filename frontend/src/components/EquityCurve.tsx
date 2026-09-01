@@ -27,22 +27,49 @@ export default function EquityCurve() {
     const dates = result.equity_curve.map((p) => p.date)
     const values = result.equity_curve.map((p) => p.value)
 
+    // 基准曲线（P0-10）：把「买入持有」和「沪深300」画在同一张图，
+    // 策略线跑不赢基准一目了然。基准可能缺失（如网络拉不到指数），需容错。
+    const series: any[] = [
+      {
+        name: '策略',
+        type: 'line',
+        data: values,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 2 },
+        areaStyle: { opacity: 0.1 },
+      },
+    ]
+
+    const bm = result.benchmarks
+    if (bm?.buy_hold?.equity_curve?.length) {
+      series.push({
+        name: '买入持有',
+        type: 'line',
+        data: bm.buy_hold.equity_curve.map((p: any) => p.value),
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1.5, type: 'dashed' },
+      })
+    }
+    if (bm?.hs300?.equity_curve?.length) {
+      series.push({
+        name: '沪深300',
+        type: 'line',
+        data: bm.hs300.equity_curve.map((p: any) => p.value),
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 1.5, type: 'dotted' },
+      })
+    }
+
     chart.setOption({
       tooltip: { trigger: 'axis' },
+      legend: series.length > 1 ? { top: 0 } : undefined,
       xAxis: { type: 'category', data: dates, axisLabel: { rotate: 30 } },
       yAxis: { type: 'value', name: '资金' },
-      series: [
-        {
-          name: '账户价值',
-          type: 'line',
-          data: values,
-          smooth: true,
-          showSymbol: false,
-          lineStyle: { width: 2 },
-          areaStyle: { opacity: 0.1 },
-        },
-      ],
-      grid: { left: 60, right: 30, top: 30, bottom: 50 },
+      series,
+      grid: { left: 60, right: 30, top: series.length > 1 ? 50 : 30, bottom: 50 },
     })
 
     const handleResize = () => {

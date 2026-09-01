@@ -18,6 +18,7 @@ from core.strategies.registry import get_strategy
 from core.analyzers import compute_metrics, BacktestMetrics
 from core.utils import safe_convert
 from core.position_sizer import calc_atr_position, calc_volatility_position
+from core.benchmark import compute_benchmarks
 
 logger = logging.getLogger("engine")
 
@@ -229,6 +230,20 @@ def run_backtest(
     # 数据来源标记：模拟数据 or 真实行情（用于前端提示）
     data_source = "mock" if df.attrs.get("is_mock") else "real"
 
+    # 10. 基准对比（P0-10）：买入持有 + 沪深300
+    #     没有基准的收益数字没有意义——策略年化 20% 但同期买入持有 25%
+    #     说明策略是失败的，而这在没有基准时完全看不出来。
+    #     基准计算失败不影响回测本身（内部已降级为 None）。
+    benchmarks = compute_benchmarks(
+        df=df,
+        start_date=start_date,
+        end_date=end_date,
+        cash=start_cash,
+        commission=commission,
+        slippage=slippage,
+        strategy_total_return=metrics.total_return,
+    )
+
     return {
         "metrics": metrics.to_dict(),
         "equity_curve": equity_curve,
@@ -237,6 +252,7 @@ def run_backtest(
         "start_cash": start_cash,
         "end_cash": end_cash,
         "data_source": data_source,
+        "benchmarks": benchmarks,
     }
 
 
