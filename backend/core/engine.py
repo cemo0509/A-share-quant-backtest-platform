@@ -104,6 +104,7 @@ def run_backtest(
         raise ValueError("无法获取该股票在指定日期范围内的行情数据，请检查股票代码和日期")
 
     # 2. 构建 Backtrader 数据源
+    #    name=symbol 让 Sizer 能识别板块（创业板/科创板涨跌停幅度不同）
     data = bt.feeds.PandasData(
         dataname=df,
         datetime="date",
@@ -113,6 +114,7 @@ def run_backtest(
         close="close",
         volume="volume",
         openinterest=-1,
+        name=symbol,
     )
 
     # 3. 初始化引擎
@@ -340,9 +342,22 @@ class _PositionSizerAdapter(bt.Sizer):
         ("atr_multiplier", 2.0),
         ("target_volatility", 0.15),
         ("slippage", 0.001),
+        ("enforce_limits", True),  # 是否启用涨跌停/停牌约束
     )
 
     def _getsizing(self, comminfo, cash, data, isbuy):
+        # ---- A 股交易约束（P0-7）----
+        # 不建模涨跌停是回测收益虚高最经典的来源：
+        # 追涨停/突破类策略在真实市场根本买不到那些票，
+        # 但回测里全都成交了，导致结果完全失去参考价值。
+        if self.p.enforce_limits:
+            if self._is_suspended(data):
+                return 0  # 停牌：无法成交
+            if isbuy and self._is_limit_up(data, self._symbol_of(data)):
+                return 0  # 涨停：买单排不上队，买不到
+            if not isbuy and self._is_limit_down(data, self._symbol_of(data)):
+                return 0  # 跌停：卖单排不上队，卖不掉
+
         if not isbuy:
             # 卖出：清掉全部持仓（允许零股）
             return self.strategy.position.size
@@ -398,6 +413,66 @@ class _PositionSizerAdapter(bt.Sizer):
             return max(size, 0)
         except Exception:
             return 0
+
+    @staticmethod
+    def _symbol_of(data) -> str:
+        """取数据源名称（即股票代码），用于判断所属板块。"""
+        try:
+            return str(getattr(data, "_name", "") or "")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _limit_ratio(symbol: str) -> float:
+        """按板块返回涨跌停幅度。
+
+        - 创业板（300/301 开头）：±20%
+        - 科创板（688 开头）：±20%
+        - 其余主板：±10%
+        （ST 股为 ±5%，但回测数据不含名称，此处按板块处理）
+        """
+        s = (symbol or "").strip().lower().replace("sh", "").replace("sz", "")
+        if s.startswith(("300", "301", "688")):
+            return 0.20
+        return 0.10
+
+    @classmethod
+    def _is_suspended(cls, data) -> bool:
+        """停牌：成交量为 0 的 K 线无法交易。"""
+        try:
+            return float(data.volume[0]) <= 0
+        except Exception:
+            return False
+
+    @classmethod
+    def _is_limit_up(cls, data, symbol: str) -> bool:
+        """涨停：当日最高价（或收盘价）触及涨停价。
+
+        真实市场中，一字涨停时买单排不上队，基本买不到。
+        用「收盘价 >= 涨停价 - 容差」判断，避免浮点误差漏判。
+        """
+        try:
+            prev_close = float(data.close[-1])
+            cur_close = float(data.close[0])
+            if prev_close <= 0:
+                return False
+            limit_price = round(prev_close * (1 + cls._limit_ratio(symbol)), 2)
+            return cur_close >= limit_price - 0.005
+        except Exception:
+            return False
+
+    @classmethod
+    def _is_limit_down(cls, data, symbol: str) -> bool:
+        """跌停：当日收盘价触及跌停价，卖单排不上队。"""
+        try:
+            prev_close = float(data.close[-1])
+            cur_close = float(data.close[0])
+            if prev_close <= 0:
+                return False
+            limit_price = round(prev_close * (1 - cls._limit_ratio(symbol)), 2)
+            return cur_close <= limit_price + 0.005
+        except Exception:
+            return False
 
     @staticmethod
     def _atr(data, period: int = 14) -> float:
