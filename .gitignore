@@ -45,3 +45,11 @@ install_test_*/
 
 # 旧发布包
 v1.0发布包/
+
+# 运行时产物（用户数据，不入库）
+# 回测历史数据库 SQLite
+backend/data/*.db
+backend/data/*.db-journal
+# 临时验证/诊断脚本（下划线开头）
+_*.py
+_*.txt
