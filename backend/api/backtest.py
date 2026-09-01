@@ -8,10 +8,45 @@ from fastapi import APIRouter, HTTPException
 
 from core.engine import run_backtest
 from core.strategies.custom_manager import load_strategy_from_code
+from core import backtest_store
 from models.schemas import BacktestRequest, BacktestCodeRequest, CompareRequest
 
 router = APIRouter()
 logger = logging.getLogger("backtest")
+
+
+# ==================== 回测历史（P0-9 持久化） ====================
+# 注意：/history 路由必须定义在 /{xxx} 形式的路由之前，
+# 否则会被路径参数路由抢先匹配。
+
+@router.get("/history")
+def list_history(limit: int = 100, symbol: str = ""):
+    """列出回测历史（摘要，按时间倒序）。"""
+    return {"status": "ok", "data": backtest_store.list_runs(limit=limit, symbol=symbol)}
+
+
+@router.get("/history/{run_id}")
+def get_history(run_id: str):
+    """读取单条回测（含完整结果，可重新载入结果页复盘）。"""
+    rec = backtest_store.get_run(run_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="回测记录不存在")
+    return {"status": "ok", "data": rec}
+
+
+@router.delete("/history/{run_id}")
+def delete_history(run_id: str):
+    """删除单条回测记录。"""
+    if not backtest_store.delete_run(run_id):
+        raise HTTPException(status_code=404, detail="回测记录不存在")
+    return {"status": "ok", "message": "已删除"}
+
+
+@router.delete("/history")
+def clear_history():
+    """清空全部回测历史。"""
+    count = backtest_store.clear_runs()
+    return {"status": "ok", "deleted": count}
 
 
 @router.post("/run")
@@ -39,6 +74,34 @@ def run(req: BacktestRequest):
             target_volatility=req.target_volatility,
         )
         logger.info("回测成功完成")
+
+        # 持久化到 SQLite（P0-9）：保存失败不影响本次回测返回
+        try:
+            strat_info = None
+            try:
+                from core.strategies.registry import get_strategy
+
+                strat_info = get_strategy(req.strategy)
+            except Exception:
+                pass
+            result["run_id"] = backtest_store.save_run(
+                result,
+                strategy_key=req.strategy,
+                strategy_name=getattr(strat_info, "name", "") or req.strategy,
+                symbol=req.symbol,
+                start_date=req.start_date,
+                end_date=req.end_date,
+                period=req.period,
+                adjust=req.adjust,
+                position_sizing=req.position_sizing,
+                cash=req.cash,
+                commission=req.commission,
+                slippage=req.slippage,
+                params=req.params,
+            )
+        except Exception as e:
+            logger.warning(f"保存回测历史失败（不影响回测结果）: {e}")
+
         return {"status": "ok", "data": result}
     except ValueError as e:
         logger.error(f"ValueError: {e}")

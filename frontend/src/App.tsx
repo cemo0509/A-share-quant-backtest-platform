@@ -11,6 +11,7 @@ import {
   LineChartOutlined,
   SwapOutlined,
   AimOutlined,
+  HistoryOutlined,
   FilterOutlined,
   RadarChartOutlined,
   MenuFoldOutlined,
@@ -38,6 +39,7 @@ const pages = {
   StockScan: () => import('./pages/StockScan'),
   StockDetail: () => import('./pages/StockDetail'),
   RealtimePool: () => import('./pages/RealtimePool'),
+  History: () => import('./pages/History'),
 }
 const Dashboard = lazy(pages.Dashboard)
 const Backtest = lazy(pages.Backtest)
@@ -51,6 +53,7 @@ const Compare = lazy(pages.Compare)
 const StockScan = lazy(pages.StockScan)
 const StockDetail = lazy(pages.StockDetail)
 const RealtimePool = lazy(pages.RealtimePool)
+const History = lazy(pages.History)
 
 // 路由 → 预加载函数映射（菜单 key 与页面 key 对应，StockDetail 按需预加载）
 const routePreload: Record<string, () => Promise<any>> = {
@@ -65,6 +68,7 @@ const routePreload: Record<string, () => Promise<any>> = {
   '/results': pages.Results,
   '/realtime': pages.RealtimeQuotes,
   '/trading': pages.Trading,
+  '/history': pages.History,
 }
 
 // 空闲时预加载所有页面（requestIdleCallback 兜底 setTimeout），避免首次跳转卡顿
@@ -108,6 +112,7 @@ const menuItems = [
       { key: '/compare', icon: <SwapOutlined />, label: '策略比较' },
       { key: '/optimize', icon: <AimOutlined />, label: '参数优化' },
       { key: '/results', icon: <BarChartOutlined />, label: '回测结果' },
+      { key: '/history', icon: <HistoryOutlined />, label: '回测历史' },
     ],
   },
   {
@@ -227,6 +232,7 @@ function AppLayout() {
               <Route path="/results" element={<Results />} />
               <Route path="/realtime" element={<RealtimeQuotes />} />
               <Route path="/trading" element={<Trading />} />
+              <Route path="/history" element={<History />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Routes>
           </Suspense>

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { BacktestMetrics } from '../stores'
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api',
@@ -294,6 +295,32 @@ export interface VisualPresetsResponse {
   names: Record<string, string>
 }
 export const getVisualPresets = () => api.get<{ data: VisualPresetsResponse }>('/visual/presets')
+
+// ===== 回测历史（P0-9 持久化） =====
+export interface BacktestHistoryItem {
+  id: string
+  created_at: string
+  strategy_key: string
+  strategy_name: string
+  symbol: string
+  start_date: string
+  end_date: string
+  period: string
+  adjust: string
+  position_sizing: string
+  cash: number
+  commission: number
+  slippage: number
+  data_source: string
+  params: Record<string, any>
+  metrics: Partial<BacktestMetrics>
+}
+
+export const listBacktestHistory = (limit = 100, symbol = '') =>
+  api.get('/backtest/history', { params: { limit, symbol } })
+export const getBacktestHistory = (runId: string) => api.get(`/backtest/history/${runId}`)
+export const deleteBacktestHistory = (runId: string) => api.delete(`/backtest/history/${runId}`)
+export const clearBacktestHistory = () => api.delete('/backtest/history')
 
 // codegen：可视化规则 → Backtrader 代码（让编辑器形成「画完就能跑」的闭环）
 export interface VisualCodegenResponse {
