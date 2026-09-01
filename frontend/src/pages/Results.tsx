@@ -66,6 +66,28 @@ export default function Results() {
           <Typography.Text type="success">数据来源：真实行情（AKShare 新浪源）</Typography.Text>
         </div>
       )}
+      {/* A 股规则防线提示（Q-07）：策略试图 T+1 当日卖出或做空时被引擎拦截，
+          用户需要知道信号被拦截过，否则会误以为策略按预期执行 */}
+      {result.constraints &&
+        (result.constraints.t1_sell_blocked > 0 || result.constraints.short_sell_blocked > 0) && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginTop: 12 }}
+          message="部分交易信号因 A 股交易规则被拦截"
+          description={
+            <>
+              {result.constraints.t1_sell_blocked > 0 && (
+                <div>T+1 约束：拦截 {result.constraints.t1_sell_blocked} 次「当日买入当日卖出」。</div>
+              )}
+              {result.constraints.short_sell_blocked > 0 && (
+                <div>禁止做空：拦截 {result.constraints.short_sell_blocked} 次「无持仓卖出」。</div>
+              )}
+              <div>被拦截的信号未成交，回测结果已按真实 A 股规则修正。</div>
+            </>
+          }
+        />
+      )}
       {result.trades && result.trades.length === 0 && (
         <Card style={{ marginTop: 16, background: '#fffbe6', borderColor: '#ffe58f' }}>
           <Typography.Text type="warning">

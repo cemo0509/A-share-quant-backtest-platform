@@ -23,6 +23,76 @@ from core.benchmark import compute_benchmarks
 logger = logging.getLogger("engine")
 
 
+def _apply_astock_rules(strategy_cls):
+    """动态子类：A 股交易规则防线（Q-07 T+1 冻结 + 禁止做空）。
+
+    实测结论（_test_t1.py Part A）：
+    - 默认 Market 单**次日开盘成交**，卖出 size 又基于下单时持仓，
+      15 个预置策略**天然满足 T+1**——防线对它们零干预、零误伤。
+    - 但引擎**允许做空**（无持仓 `sell()` 直接开出负持仓，已实测复现），
+      且 Close 单 / cheat 模式**当日成交**，可卖出当日买入的份额。
+      这两条是真实缺口，必须在本层兜底（自定义代码回测同样经过这里）。
+
+    规则实现：
+    - 做空拦截：卖出数量裁剪到当前持仓；无持仓卖出直接拒绝。
+    - T+1 冻结：仅对**当日成交**的单据（Close 单 / broker 开了 cheat-on-close）
+      生效——当日买入的份额当日不可卖，超出部分裁剪。
+      Market 单次日成交天然合规，不检查（避免误伤合法卖单）。
+    """
+    class _AStockGuarded(strategy_cls):
+        def __init__(self):
+            super().__init__()
+            self._astock_buy_date = None
+            self._astock_buy_size = 0.0
+            self.astock_t1_blocked = 0      # T+1 冻结拦截/裁剪次数
+            self.astock_short_blocked = 0   # 做空拦截/裁剪次数
+
+        def notify_order(self, order):
+            if order.status == order.Completed and order.isbuy():
+                d = self.datas[0].datetime.date(0)
+                if self._astock_buy_date != d:
+                    self._astock_buy_date = d
+                    self._astock_buy_size = 0.0
+                self._astock_buy_size += abs(order.executed.size)
+            # 必须调 super：BaseStrategy 在此清理 self.order，
+            # 不调会让策略的「有单在手就不再下单」守卫永久卡死。
+            super().notify_order(order)
+
+        def sell(self, data=None, size=None, **kwargs):
+            data = data if data is not None else self.datas[0]
+            pos = self.getposition(data).size
+            exectype = kwargs.get("exectype")
+            same_day = (
+                exectype == bt.Order.Close
+                or bool(getattr(self.broker.p, "coc", False))
+            )
+            frozen = 0.0
+            if same_day and self._astock_buy_date == data.datetime.date(0):
+                frozen = self._astock_buy_size
+            sellable = max(pos - frozen, 0.0)
+            # size=None 时策略意图是全仓卖出（sizer 也是返回全仓），显式裁剪等价
+            requested = pos if size is None else size
+            req = min(requested, sellable)
+            if req <= 0:
+                if pos > 0:
+                    self.astock_t1_blocked += 1
+                    logger.debug(f"T+1 拦截：当日买入 {frozen:.0f} 股冻结，卖出被拒绝")
+                else:
+                    self.astock_short_blocked += 1
+                    logger.debug("做空拦截：无持仓卖出被拒绝（A 股股票禁止做空）")
+                return None
+            if req < requested:
+                if same_day and frozen > 0:
+                    self.astock_t1_blocked += 1
+                else:
+                    self.astock_short_blocked += 1
+            return super().sell(data=data, size=req, **kwargs)
+
+    _AStockGuarded.__name__ = strategy_cls.__name__
+    _AStockGuarded.__qualname__ = strategy_cls.__qualname__
+    return _AStockGuarded
+
+
 @dataclass
 class BacktestResult:
     """完整回测结果。"""
@@ -173,7 +243,8 @@ def run_backtest(
             bt_params = filtered_params
     
     logger.debug(f"Running backtest: strategy={strategy_cls.__name__}, params={list(bt_params.keys())}")
-    cerebro.addstrategy(strategy_cls, **bt_params)
+    # Q-07：包装 A 股交易规则防线（T+1 冻结 + 禁止做空），对预置策略零行为变化
+    cerebro.addstrategy(_apply_astock_rules(strategy_cls), **bt_params)
 
     # 5. 添加分析器
     # 夏普必须年化：backtrader 的 SharpeRatio 默认 annualize=False，
@@ -255,6 +326,11 @@ def run_backtest(
         "end_cash": end_cash,
         "data_source": data_source,
         "benchmarks": benchmarks,
+        # A 股规则防线计数（Q-07）：>0 说明策略试图进行违规交易被拦截
+        "constraints": {
+            "t1_sell_blocked": getattr(strat, "astock_t1_blocked", 0),
+            "short_sell_blocked": getattr(strat, "astock_short_blocked", 0),
+        },
     }
 
 

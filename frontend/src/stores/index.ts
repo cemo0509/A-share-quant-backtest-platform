@@ -81,6 +81,11 @@ export interface BacktestResultData {
   data_source?: 'real' | 'mock'
   /** 基准对比（P0-10）：买入持有 + 沪深300 + 超额收益 */
   benchmarks?: Benchmarks
+  /** A 股规则防线计数（Q-07）：>0 说明策略试图违规交易被拦截 */
+  constraints?: {
+    t1_sell_blocked: number
+    short_sell_blocked: number
+  }
 }
 
 // 主题模式：'dark' | 'light' | 'system'（跟随系统）。持久化到 localStorage
