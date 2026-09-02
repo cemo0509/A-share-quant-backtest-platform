@@ -82,6 +82,19 @@ export default function Backtest() {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
+      // S-05：必须在发起请求「之前」保存参数。回测失败（后端未启动 / 超时等）
+      // 会直接跳进 catch，若把保存放在 runBacktest 之后就永远执行不到——
+      // 而失败恰恰是最该保留参数的场景：几乎必然重试，且往往只改一个字段。
+      saveBacktestParams({
+        formValues: {
+          ...values,
+          range: values.range
+            ? values.range.map((d: any) => d.format('YYYY-MM-DD'))
+            : values.range,
+        },
+        selectedKey,
+        paramValues,
+      })
       const req: BacktestReq = {
         strategy: selectedKey,
         symbol: values.symbol,
@@ -103,18 +116,6 @@ export default function Backtest() {
       setLoading(true)
       const res = await runBacktest(req)
       setResult(res.data.data)
-      // F-02c：记住本次参数，下次回到本页自动回填。
-      // range 是 dayjs 对象，需转成字符串才能序列化存储。
-      saveBacktestParams({
-        formValues: {
-          ...values,
-          range: values.range
-            ? values.range.map((d: any) => d.format('YYYY-MM-DD'))
-            : values.range,
-        },
-        selectedKey,
-        paramValues,
-      })
       message.success('回测完成')
       navigate('/results')
     } catch (e: any) {
