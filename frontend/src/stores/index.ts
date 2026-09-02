@@ -116,6 +116,9 @@ interface AppState {
 // 在 /results 页按 F5 刷新就会被清空、页面退回「暂无回测结果」。
 // 存 sessionStorage 可扛住刷新，关闭标签页自动清除，不长期占用存储。
 const RESULT_STORAGE_KEY = 'last-backtest-result'
+// S-02：持久化结构版本号。今后只要改动 BacktestResultData 的结构就 +1，
+// 旧缓存会自动作废，避免脏数据通过校验后被送去渲染（白屏 / 指标错乱）。
+const RESULT_SCHEMA_VERSION = 1
 
 function loadPersistedResult(): BacktestResultData | null {
   try {
@@ -123,14 +126,66 @@ function loadPersistedResult(): BacktestResultData | null {
     const raw = sessionStorage.getItem(RESULT_STORAGE_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw)
+    if (!parsed || parsed.v !== RESULT_SCHEMA_VERSION) return null
+    const data = parsed.data
     // 基本结构校验：缺关键字段视为无效缓存，避免用损坏数据渲染图表
-    if (!parsed || typeof parsed !== 'object' || !parsed.metrics || !Array.isArray(parsed.equity_curve)) {
+    if (!data || typeof data !== 'object' || !data.metrics || !Array.isArray(data.equity_curve)) {
       return null
     }
-    return parsed as BacktestResultData
-  } catch {
+    return data as BacktestResultData
+  } catch (e) {
+    console.warn('[store] 读取持久化回测结果失败，已忽略:', e)
     return null
   }
+}
+
+// F-02c：回测表单参数记忆。路由是 lazy 的，从 /results 返回 /backtest 会重新 mount，
+// 而表单 initialValues 全是硬编码、useEffect 又会把策略重置为列表第一项，
+// 导致「跑完 → 看结果 → 回来改个参数」要全量重填。
+// 参数迭代是回测平台最高频的操作，这个摩擦会直接压制「多试几组参数」的意愿。
+const PARAMS_STORAGE_KEY = 'last-backtest-params'
+const PARAMS_SCHEMA_VERSION = 1
+
+/** 回测表单快照：表单值 + 选中策略 + 该策略的参数值 */
+export interface BacktestFormSnapshot {
+  formValues: Record<string, any>
+  selectedKey: string
+  paramValues: Record<string, number>
+}
+
+export function saveBacktestParams(snapshot: BacktestFormSnapshot): void {
+  try {
+    if (typeof sessionStorage === 'undefined') return
+    sessionStorage.setItem(
+      PARAMS_STORAGE_KEY,
+      JSON.stringify({ v: PARAMS_SCHEMA_VERSION, data: snapshot })
+    )
+  } catch (e) {
+    console.warn('[store] 回测参数持久化失败，下次进入将使用默认参数:', e)
+  }
+}
+
+export function loadBacktestParams(): BacktestFormSnapshot | null {
+  try {
+    if (typeof sessionStorage === 'undefined') return null
+    const raw = sessionStorage.getItem(PARAMS_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || parsed.v !== PARAMS_SCHEMA_VERSION) return null
+    const data = parsed.data
+    if (!data || typeof data !== 'object' || !data.selectedKey) return null
+    return data as BacktestFormSnapshot
+  } catch (e) {
+    console.warn('[store] 读取持久化回测参数失败，已忽略:', e)
+    return null
+  }
+}
+
+export function clearBacktestParams(): void {
+  try {
+    if (typeof sessionStorage === 'undefined') return
+    sessionStorage.removeItem(PARAMS_STORAGE_KEY)
+  } catch { /* 清理失败无副作用，忽略 */ }
 }
 
 const STORAGE_KEY = 'app-theme-mode'
@@ -147,9 +202,20 @@ export const useStore = create<AppState>((set) => ({
   mode: safeInitialMode,
   setResult: (result) => {
     try {
-      if (result) sessionStorage.setItem(RESULT_STORAGE_KEY, JSON.stringify(result))
-      else sessionStorage.removeItem(RESULT_STORAGE_KEY)
-    } catch { /* 存储不可用（隐私模式 / 超出配额）时不影响主流程 */ }
+      if (result) {
+        sessionStorage.setItem(
+          RESULT_STORAGE_KEY,
+          JSON.stringify({ v: RESULT_SCHEMA_VERSION, data: result })
+        )
+      } else {
+        sessionStorage.removeItem(RESULT_STORAGE_KEY)
+      }
+    } catch (e) {
+      // S-01：不能静默。写入失败（隐私模式 / 超出配额）时内存 store 仍有值，
+      // 当次能正常看结果，只有刷新才丢——用户会遇到「有时保住、有时没保住」
+      // 的不可复现现象，并误以为刷新保持功能根本没生效。这里至少留下线索。
+      console.warn('[store] 回测结果持久化失败，刷新后将丢失:', e)
+    }
     set({ result })
   },
   setLoading: (loading) => set({ loading }),

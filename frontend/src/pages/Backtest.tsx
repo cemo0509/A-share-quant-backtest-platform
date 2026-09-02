@@ -7,7 +7,7 @@ import dayjs from 'dayjs'
 import {
   getStrategies, runBacktest, type BacktestReq, POSITION_SIZING_OPTIONS,
 } from '../api'
-import { useStore } from '../stores'
+import { useStore, loadBacktestParams, saveBacktestParams, clearBacktestParams } from '../stores'
 import MetricsPanel from '../components/MetricsPanel'
 import { useNavigate } from 'react-router-dom'
 import type { StrategyItem } from '../types'
@@ -34,10 +34,32 @@ export default function Backtest() {
         const tradingList = list.filter(
           (s: StrategyItem) => s.category === 'trading' || s.category === 'hybrid'
         )
-        setStrategies(tradingList.length > 0 ? tradingList : list)
-        if (tradingList.length) {
-          setSelectedKey(tradingList[0].key)
-          initParams(tradingList[0])
+        // 显式标注：list 来自 any 响应，若不标注会让 shown 退化成 any[]，
+        // 导致下面 .find() 的回调参数丢失类型（TS7006）
+        const shown: StrategyItem[] = tradingList.length > 0 ? tradingList : list
+        setStrategies(shown)
+        if (!shown.length) return
+
+        // F-02c：优先恢复上次使用的策略与参数。
+        // 顺序很关键——必须在策略列表加载完成之后回填，否则会被下面的默认逻辑冲掉。
+        const saved = loadBacktestParams()
+        const savedStrategy = saved && shown.find((s) => s.key === saved.selectedKey)
+        if (saved && savedStrategy) {
+          setSelectedKey(savedStrategy.key)
+          if (saved.paramValues && Object.keys(saved.paramValues).length) {
+            setParamValues(saved.paramValues)
+          } else {
+            initParams(savedStrategy)
+          }
+          if (saved.formValues) {
+            const fv: Record<string, any> = { ...saved.formValues }
+            // range 存的是字符串，需还原为 dayjs 对象供 RangePicker 使用
+            if (Array.isArray(fv.range)) fv.range = fv.range.map((d: any) => dayjs(d as string))
+            form.setFieldsValue(fv)
+          }
+        } else {
+          setSelectedKey(shown[0].key)
+          initParams(shown[0])
         }
       })
       .catch(() => message.warning('策略列表加载失败，请确认后端已启动'))
@@ -81,6 +103,18 @@ export default function Backtest() {
       setLoading(true)
       const res = await runBacktest(req)
       setResult(res.data.data)
+      // F-02c：记住本次参数，下次回到本页自动回填。
+      // range 是 dayjs 对象，需转成字符串才能序列化存储。
+      saveBacktestParams({
+        formValues: {
+          ...values,
+          range: values.range
+            ? values.range.map((d: any) => d.format('YYYY-MM-DD'))
+            : values.range,
+        },
+        selectedKey,
+        paramValues,
+      })
       message.success('回测完成')
       navigate('/results')
     } catch (e: any) {
@@ -90,6 +124,19 @@ export default function Backtest() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // F-02c：显式重置——清掉记忆的参数并回到策略默认值，
+  // 避免用户被上一次的旧参数困住
+  const handleResetParams = () => {
+    clearBacktestParams()
+    form.resetFields()
+    const first = strategies[0]
+    if (first) {
+      setSelectedKey(first.key)
+      initParams(first)
+    }
+    message.info('已重置为默认参数')
   }
 
   return (
@@ -247,6 +294,8 @@ export default function Backtest() {
             <Button type="primary" onClick={handleSubmit}>
               运行回测
             </Button>
+            {/* F-02c：参数已记忆，需提供显式重置入口 */}
+            <Button onClick={handleResetParams}>重置为默认</Button>
           </Space>
         </Form>
       </Card>

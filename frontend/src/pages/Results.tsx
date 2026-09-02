@@ -61,10 +61,21 @@ export default function Results() {
           message="本次回测基于模拟数据"
           description="真实行情获取失败，已降级为随机生成的模拟K线。该结果（收益、夏普、回撤等）不反映任何真实市场规律，不可作为策略有效性依据。请检查网络后重新回测。"
         />
-      ) : (
+      ) : result.data_source === 'real' ? (
         <div style={{ marginTop: 12 }}>
           <Typography.Text type="success">数据来源：真实行情（AKShare 新浪源）</Typography.Text>
         </div>
+      ) : (
+        // S-03：data_source 缺省（undefined 或未知值）时不得宣称「真实行情」。
+        // 与后端「不确定就不标真实」的原则保持一致——缺省即宣称真实会把
+        // 未回填的旧缓存结果包装成可信数据，是本次审计要堵的错误模式。
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginTop: 12 }}
+          message="数据来源未知"
+          description="无法确认本次回测使用的是真实行情还是模拟数据（可能是旧版本缓存的结果，或该字段未回填）。请勿据此做决策，建议重新回测一次以明确数据来源。"
+        />
       )}
       {/* A 股规则防线提示（Q-07）：策略试图 T+1 当日卖出或做空时被引擎拦截，
           用户需要知道信号被拦截过，否则会误以为策略按预期执行 */}
