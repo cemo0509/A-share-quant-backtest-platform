@@ -50,6 +50,11 @@ v1.0发布包/
 # 回测历史数据库 SQLite
 backend/data/*.db
 backend/data/*.db-journal
+# 选股扫描结果（运行时生成，不入库）
+backend/data/scan_results/
 # 临时验证/诊断脚本（下划线开头）
 _*.py
 _*.txt
+
+# TypeScript 增量构建缓存（随每次构建变化，不该入库）
+*.tsbuildinfo

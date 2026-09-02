@@ -293,6 +293,9 @@ def optimize_params(req: OptimizeRequest):
                     max_drawdown=m.get("max_drawdown", 0),
                     win_rate=m.get("win_rate", 0),
                     total_trades=m.get("total_trades", 0),
+                    # F-01：透传每组参数的数据源，让前端能识别
+                    # 「最优参数是不是从 mock 数据里跑出来的」
+                    data_source=raw.get("data_source", "unknown"),
                 ))
             except Exception as e:
                 logger.debug(f"参数组合回测失败 {params}: {e}")

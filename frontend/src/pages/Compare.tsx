@@ -1,6 +1,6 @@
 // 策略比较页面
 import { useEffect, useState } from 'react'
-import { Card, Form, Select, DatePicker, InputNumber, Input, Button, message, Spin, Table, Typography } from 'antd'
+import { Card, Form, Select, DatePicker, InputNumber, Input, Button, message, Spin, Table, Tag, Typography, Alert } from 'antd'
 import dayjs from 'dayjs'
 import { getStrategies, compareStrategies } from '../services/api'
 import type { StrategyItem } from '../types'
@@ -130,6 +130,17 @@ export default function Compare() {
         return metrics.total_trades || 0
       }
     },
+    // F-01：标注每个策略结果来自真实行情还是 mock，mock 行的指标不可信
+    {
+      title: '数据源',
+      key: 'data_source',
+      render: (record: CompareResult) => {
+        const src = record.data?.data_source || 'unknown'
+        if (src === 'real') return <Tag color="green">真实行情</Tag>
+        if (src === 'mock') return <Tag color="orange">模拟数据</Tag>
+        return <Tag>{src}</Tag>
+      }
+    },
     {
       title: '操作',
       key: 'action',
@@ -202,6 +213,17 @@ export default function Compare() {
         </Form>
       </Card>
       
+      {/* F-01：任一策略结果为 mock，则该次比较不构成策略选择的依据 */}
+      {results.length > 0 && results.some((r) => r.data?.data_source === 'mock') && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginTop: 16 }}
+          message="本次策略比较包含模拟数据，结果不可信"
+          description="部分策略是在真实行情获取失败后用随机生成的模拟 K 线跑出来的，收益/夏普等指标不反映任何真实市场规律。请检查网络后重跑，或只采纳数据源列为「真实行情」的策略。"
+        />
+      )}
+
       {results.length > 0 && (
         <Card title="比较结果" style={{ marginTop: 16 }}>
           <Table

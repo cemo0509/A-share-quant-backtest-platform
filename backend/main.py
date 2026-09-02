@@ -176,8 +176,13 @@ async def global_exception_handler(request: Request, exc: Exception):
     # 外部数据源不可用（弱网/代理/限流）不是服务端缺陷：返回 503 并以 WARNING
     # 记录，避免与真正的代码 bug 混在一起，前端也能给出准确的「网络」提示。
     if _is_network_error(exc):
+        # E-02：即使判定为「数据源不可用」，也记录完整堆栈。
+        # is_network_error 存在误判可能（把 TypeError / KeyError 等代码 bug
+        # 当成网络问题），此时这份 traceback 是唯一的排查线索，
+        # 否则 bug 会被 503 静默吞掉、永远看不到真实原因。
         logger.warning(
-            f"外部数据源不可用: {request.method} {request.url.path}\n{exc}"
+            f"外部数据源不可用: {request.method} {request.url.path}\n{exc}",
+            exc_info=True,
         )
         return JSONResponse(
             status_code=503,

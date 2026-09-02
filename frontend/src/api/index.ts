@@ -211,6 +211,9 @@ export interface OptimizeResultItem {
   max_drawdown: number
   win_rate: number
   total_trades: number
+  // F-01：数据源标识，real=真实行情 / mock=模拟行情（真实行情获取失败时降级）。
+  // 优化结果若有任一项为 mock，则该「最优参数」不构成决策依据。
+  data_source?: 'real' | 'mock' | string
 }
 
 export const runOptimize = (request: OptimizeRequest) => api.post('/optimize', request)

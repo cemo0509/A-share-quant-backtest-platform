@@ -195,6 +195,9 @@ class OptimizeResultItem(BaseModel):
     max_drawdown: float
     win_rate: float
     total_trades: int
+    # F-01：透传数据源，前端可识别「最优参数是不是从 mock 数据里跑出来的」并高亮告警，
+    # 避免基于随机行情的网格搜索结果被误用为决策依据
+    data_source: str = Field("unknown", description="数据源：real=真实行情, mock=模拟行情")
 
 
 class OutSampleValidation(BaseModel):

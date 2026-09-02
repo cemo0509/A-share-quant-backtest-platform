@@ -112,6 +112,27 @@ interface AppState {
   setMode: (m: ThemeMode) => void
 }
 
+// F-02：回测结果持久化。此前 result 只存在于内存（zustand），
+// 在 /results 页按 F5 刷新就会被清空、页面退回「暂无回测结果」。
+// 存 sessionStorage 可扛住刷新，关闭标签页自动清除，不长期占用存储。
+const RESULT_STORAGE_KEY = 'last-backtest-result'
+
+function loadPersistedResult(): BacktestResultData | null {
+  try {
+    if (typeof sessionStorage === 'undefined') return null
+    const raw = sessionStorage.getItem(RESULT_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    // 基本结构校验：缺关键字段视为无效缓存，避免用损坏数据渲染图表
+    if (!parsed || typeof parsed !== 'object' || !parsed.metrics || !Array.isArray(parsed.equity_curve)) {
+      return null
+    }
+    return parsed as BacktestResultData
+  } catch {
+    return null
+  }
+}
+
 const STORAGE_KEY = 'app-theme-mode'
 const validModes: ThemeMode[] = ['dark', 'light', 'system']
 const initialMode: ThemeMode =
@@ -121,10 +142,16 @@ const initialMode: ThemeMode =
 const safeInitialMode: ThemeMode = validModes.includes(initialMode) ? initialMode : 'dark'
 
 export const useStore = create<AppState>((set) => ({
-  result: null,
+  result: loadPersistedResult(),
   loading: false,
   mode: safeInitialMode,
-  setResult: (result) => set({ result }),
+  setResult: (result) => {
+    try {
+      if (result) sessionStorage.setItem(RESULT_STORAGE_KEY, JSON.stringify(result))
+      else sessionStorage.removeItem(RESULT_STORAGE_KEY)
+    } catch { /* 存储不可用（隐私模式 / 超出配额）时不影响主流程 */ }
+    set({ result })
+  },
   setLoading: (loading) => set({ loading }),
   setMode: (m) => {
     try { localStorage.setItem(STORAGE_KEY, m) } catch { /* 忽略存储异常 */ }
