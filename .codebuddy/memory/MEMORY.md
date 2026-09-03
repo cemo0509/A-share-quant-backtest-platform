@@ -63,3 +63,12 @@ Start-Process -FilePath 'node' -ArgumentList 'node_modules/vite/bin/vite.js' `
   ```
 - 恢复：用「启动速查」那段 Start-Process 再起一次即可（无需清理，下次同样会死）。
   若怀疑代码 bug，看根目录 `backend-err3.log`（上次启动的 stderr）。
+
+## 核验 GitHub 代码时必须绕开 CDN 缓存（重要，会制造"改动没生效"的假象）
+- 通过 `raw.githubusercontent.com` 核验**刚推送**的代码时，会命中 CDN 旧副本
+  （raw 响应带约 5 分钟 max-age），看起来像"改动根本没提交"。
+- 所有 raw URL **一律带 cache-buster**，例如：
+  `.../stores/index.ts?cb=20260902175600`
+- 这是 WorkBuddy 在 2026-09-02 复核时差点误判的根因——它第一次拉到旧代码，
+  险些判定"一条都没改"，加 cache-buster 重拉才拿到真实版本。
+- 同理，任何"推送后立刻核验"的场景都要留意这个时间窗。
