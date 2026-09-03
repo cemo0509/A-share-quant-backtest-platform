@@ -54,6 +54,10 @@ class _CodegenContext:
         self.init_lines: list[str] = []
         self._indicator_cache: dict[str, str] = {}  # 指标签名 -> 变量名
         self._seq = 0
+        # A-01：登记所有「退化」的条件（无法编译、被占位值悄悄替换的）。
+        # 编译结束后若非空，generate_strategy_code 会直接报错，
+        # 绝不交付一份看似正常、实则条件已被改写的策略。
+        self.degraded: list[str] = []
 
     def next_var(self, prefix: str = "ind") -> str:
         self._seq += 1
@@ -381,7 +385,15 @@ def _target_expr(ctx: _CodegenContext, leaf: dict, as_line: bool = False) -> str
         if compiler:
             expr = compiler(ctx, target_leaf)
             return expr if as_line else f"{expr}[0]"
-        # 无法编译的目标，退化为常数 0（保证代码可运行）
+        # A-01：无法编译的目标不再「静默」退化为常数 0。
+        # 那会让 `MA5 > 0.0` 这类条件恒真（价格恒 > 0），策略退化成「有钱就买」，
+        # 照样产出完整指标、资金曲线和交易明细，看起来完全正常
+        # ——这是污染结论本身，不是锦上添花的降级。
+        # 仍返回占位值以保证语法完整，但登记退化，由入口统一报错。
+        ctx.degraded.append(
+            f"比较目标「{leaf.get('targetIndicator') or key}」无法编译"
+            f"（若取 0 会使条件恒真，已拒绝生成）"
+        )
         return "0.0"
 
     # 常数
@@ -395,7 +407,10 @@ def _compile_leaf(ctx: _CodegenContext, leaf: dict) -> tuple[str, str]:
     compiler = _INDICATOR_COMPILERS.get(indicator)
 
     if compiler is None:
-        # 不支持的指标：生成一个恒不成立的表达式，保证代码可运行
+        # A-01：不支持的指标。仍返回恒不成立表达式以保证语法完整，
+        # 但必须登记——多条件时若只有部分失效，整体 buy_expr 并非 "False"，
+        # 入口那条检查抓不到，就会交付一份条件被悄悄改写的策略。
+        ctx.degraded.append(f"不支持的指标「{indicator}」")
         logger.warning(f"codegen: 不支持的指标 {indicator}")
         return ("False", "False")
 
@@ -453,7 +468,8 @@ def _compile_leaf(ctx: _CodegenContext, leaf: dict) -> tuple[str, str]:
     if operator == "less":
         return (f"({left} < {target})", f"({left} >= {target})")
 
-    # 兜底
+    # A-01：兜底（运算符未覆盖）。同样登记，理由同上。
+    ctx.degraded.append(f"不支持的运算符「{operator}」（指标 {indicator}）")
     return ("False", "False")
 
 
@@ -501,18 +517,22 @@ def _compile_golden_cross(ctx: _CodegenContext, leaf: dict, indicator: str) -> t
         )
         return (f"({cross_var}[0] > 0)", f"({cross_var}[0] < 0)")
 
+    # A-01：金叉/死叉分支未覆盖到，登记退化
+    ctx.degraded.append(f"指标「{indicator}」不支持金叉/死叉比较")
     return ("False", "False")
 
 
 def _compile_node(ctx: _CodegenContext, node: dict) -> tuple[str, str]:
     """递归编译节点（叶子或组合），返回 (买入表达式, 卖出表达式)。"""
     if not node:
+        ctx.degraded.append("存在空的条件节点")
         return ("False", "False")
 
     # 组合节点
     if node.get("type") == "group" or "items" in node:
         items = node.get("items") or []
         if not items:
+            ctx.degraded.append("存在空的条件组合（未添加子条件）")
             return ("False", "False")
         op = (node.get("operator") or "AND").upper()
         joiner = " and " if op == "AND" else " or "
@@ -563,6 +583,17 @@ def generate_strategy_code(
     ctx = _CodegenContext()
     root = {"type": "group", "operator": rule.get("operator", "AND"), "items": rule["items"]}
     buy_expr, sell_expr = _compile_node(ctx, root)
+
+    # A-01：只要有任何一处条件退化过，就拒绝生成。
+    # 此前只检查 buy_expr 是否整体为 "False"，因此「多条件中仅部分失效」
+    # 和「比较目标取 0 导致恒真」两种情况都抓不到，用户会拿到一份
+    # status: ok、指标齐全、曲线完整，但买入条件已被悄悄改写的策略。
+    if ctx.degraded:
+        detail = "；".join(dict.fromkeys(ctx.degraded))  # 去重且保序
+        raise ValueError(
+            f"可视化规则中有 {len(ctx.degraded)} 处条件无法编译：{detail}。"
+            f"为避免生成「看似正常实则错误」的策略，已拒绝生成代码，请修正这些条件后重试。"
+        )
 
     if buy_expr in ("False", "(False)"):
         raise ValueError("未能从可视化规则生成有效的买入条件，请检查条件配置")

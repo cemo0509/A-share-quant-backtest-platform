@@ -323,9 +323,20 @@ class WatchlistItem(BaseModel):
 # ==================== 导出 ====================
 
 class ExportRequest(BaseModel):
-    """通用导出请求。"""
+    """通用导出请求（JSON 用）。"""
     data: dict
     format: str = "json"
+    filename: str = "export"
+
+
+class ExportCsvDataRequest(BaseModel):
+    """CSV 导出请求（交易明细列表）。
+
+    必须与 ExportRequest 分开：JSON 导出的 data 是 dict，而 CSV 要求 list。
+    两者共用一个 schema 会造成死结——传 dict 会在实现里报「必须是列表」，
+    传 list 又过不了 dict 校验，导致 CSV 导出永远不可用。
+    """
+    data: list[dict]
     filename: str = "export"
 
 
