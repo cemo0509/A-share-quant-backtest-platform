@@ -17,7 +17,7 @@ import math as _math
 import numpy as _np
 
 from api import backtest, data, strategy, trading, stocks, optimize, export, market, stock_scan
-from api import visual_editor, monitor
+from api import visual_editor, monitor, screener
 from core.net_errors import is_network_error as _is_network_error
 
 # 日志配置：控制台 + 文件轮转（单文件最大 5MB，保留 3 个历史文件）
@@ -148,6 +148,7 @@ app.include_router(export.router, prefix="/api/export", tags=["导出"])
 app.include_router(market.router, prefix="/api/market", tags=["市场状态"])
 app.include_router(stock_scan.router, prefix="/api", tags=["选股池"])
 app.include_router(visual_editor.router, prefix="/api/visual", tags=["可视化策略"])
+app.include_router(screener.router, prefix="/api", tags=["因子选股"])
 app.include_router(monitor.router, prefix="/api", tags=["实时监控"])
 
 

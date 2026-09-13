@@ -37,6 +37,7 @@ const pages = {
   Optimize: () => import('./pages/Optimize'),
   Compare: () => import('./pages/Compare'),
   StockScan: () => import('./pages/StockScan'),
+  FactorScreener: () => import('./pages/FactorScreener'),
   StockDetail: () => import('./pages/StockDetail'),
   RealtimePool: () => import('./pages/RealtimePool'),
   History: () => import('./pages/History'),
@@ -51,6 +52,7 @@ const Trading = lazy(pages.Trading)
 const Optimize = lazy(pages.Optimize)
 const Compare = lazy(pages.Compare)
 const StockScan = lazy(pages.StockScan)
+const FactorScreener = lazy(pages.FactorScreener)
 const StockDetail = lazy(pages.StockDetail)
 const RealtimePool = lazy(pages.RealtimePool)
 const History = lazy(pages.History)
@@ -60,6 +62,7 @@ const routePreload: Record<string, () => Promise<any>> = {
   '/': pages.Dashboard,
   '/backtest': pages.Backtest,
   '/stock-scan': pages.StockScan,
+  '/screener': pages.FactorScreener,
   '/realtime-pool': pages.RealtimePool,
   '/optimize': pages.Optimize,
   '/compare': pages.Compare,
@@ -126,6 +129,7 @@ const menuItems = [
     type: 'group' as const,
     label: '选股与行情',
     children: [
+      { key: '/screener', icon: <AimOutlined />, label: '因子选股' },
       { key: '/stock-scan', icon: <FilterOutlined />, label: '选股池' },
       { key: '/realtime-pool', icon: <RadarChartOutlined />, label: '实时选股池' },
       { key: '/realtime', icon: <LineChartOutlined />, label: '实时行情' },
@@ -222,6 +226,7 @@ function AppLayout() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/backtest" element={<Backtest />} />
+              <Route path="/screener" element={<FactorScreener />} />
               <Route path="/stock-scan" element={<StockScan />} />
               <Route path="/realtime-pool" element={<RealtimePool />} />
               <Route path="/stock/:symbol" element={<StockDetail />} />

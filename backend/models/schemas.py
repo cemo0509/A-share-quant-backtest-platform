@@ -340,6 +340,24 @@ class ExportCsvDataRequest(BaseModel):
     filename: str = "export"
 
 
+# ==================== 自定义因子选股 ====================
+
+class ScreenerRequest(BaseModel):
+    """自定义因子选股请求（VisualRule 条件组合）。
+
+    与 StockScanRequest 的区别：后者基于预置策略 + backtrader 回测；
+    本请求基于用户自由组合的因子条件，直接对本地数据计算指标并布尔筛选。
+    """
+    rule: dict = Field(..., description="可视化规则（扁平 AND：items 为叶子条件）")
+    stock_range: str = Field("all", description="选股范围：all/hs300/zz500/custom")
+    custom_stocks: list[str] = Field(default_factory=list, description="自定义股票列表")
+    scan_date: Optional[str] = Field(None, description="单日模式的扫描日期 YYYYMMDD")
+    start_date: Optional[str] = Field(None, description="区间模式起始日")
+    end_date: Optional[str] = Field(None, description="区间模式结束日")
+    max_stocks: int = Field(0, description="扫描上限，0=不限制")
+    prepare_first: bool = Field(True, description="是否先批量预热数据到本地缓存")
+
+
 class ExportJsonRequest(BaseModel):
     """JSON 导出请求。"""
     result: dict

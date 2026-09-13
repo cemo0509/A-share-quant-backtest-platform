@@ -219,6 +219,20 @@ export interface OptimizeResultItem {
 export const runOptimize = (request: OptimizeRequest) => api.post('/optimize', request)
 export const getOptimizeMetrics = () => api.get('/optimize/metrics')
 
+// ===== 自定义因子选股 =====
+/** 按可视化条件组合筛选股票。自由组合因子，后端直接计算指标 + 布尔筛选（不跑回测），
+ *  配合数据预热做到「首次下载慢、之后改条件秒级」。 */
+export const runScreener = (req: {
+  rule: any
+  stock_range?: string
+  custom_stocks?: string[]
+  scan_date?: string
+  start_date?: string
+  end_date?: string
+  max_stocks?: number
+  prepare_first?: boolean
+}) => api.post('/screener/run', req)
+
 // ===== 导出 =====
 export const exportResultJson = async (result: any): Promise<void> => {
   const response = await api.post('/optimize/export/json', { result }, { responseType: 'blob' })
