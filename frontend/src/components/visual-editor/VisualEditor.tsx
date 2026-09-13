@@ -5,23 +5,22 @@ import {
   Form, InputNumber, DatePicker, Alert,
 } from 'antd'
 import {
-  SaveOutlined, CodeOutlined, BulbOutlined, AppstoreOutlined, ThunderboltOutlined,
+  SaveOutlined, CodeOutlined, BulbOutlined, ThunderboltOutlined, AppstoreOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import GlobalSettingsBar from './GlobalSettingsBar'
-import IndicatorTree from './IndicatorTree'
-import ParameterPanel from './ParameterPanel'
-import ConditionPreview from './ConditionPreview'
+import FactorEditor from '../factor-editor/FactorEditor'
 import {
   codegenVisualRule, runVisualBacktest, saveCustomStrategy,
 } from '../../api'
 import { useStore } from '../../stores'
-import { VisualRule, ConditionLeaf, ConditionNode, ConditionGroup, VisualGlobal, createGroup, createLeaf, newId, applyPreset, updateNodeById, collectLeaves } from './types'
 import {
-  getVisualIndicators, saveVisualRule, loadVisualRule,
-  getVisualPresets,
+  getVisualIndicators, saveVisualRule, loadVisualRule, getVisualPresets,
 } from '../../api'
 import type { VisualIndicatorTree } from '../../api'
+import {
+  VisualRule, VisualGlobal, ConditionLeaf, createGroup, applyPreset, collectLeaves,
+} from './types'
 
 const { Text } = Typography
 
@@ -44,6 +43,11 @@ function defaultGlobal(tree: VisualIndicatorTree): VisualGlobal {
   }
 }
 
+/** 把规则压平为「AND 连接的一组叶子」（同花顺式编辑器只支持扁平 AND） */
+function flatten(rule: VisualRule): VisualRule {
+  return { ...rule, operator: 'AND', items: collectLeaves(rule.items || []) }
+}
+
 export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }: Props) {
   const navigate = useNavigate()
   const { setResult } = useStore()
@@ -56,7 +60,6 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
   const [jsonOpen, setJsonOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
   const [presets, setPresets] = useState<{ presets: Record<string, any>; names: Record<string, string> } | null>(null)
   const [presetKey, setPresetKey] = useState<string | undefined>(undefined)
   const autoFilledRef = useRef<Set<string>>(new Set())
@@ -89,7 +92,6 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
     }
     // 预置策略（如 cci_macd_selection）没有独立存储的可视化规则，
     // 直接走「智能推荐预设」自动填充推荐条件即可，不必去 load（否则必然 404）。
-    // presets 未就绪时先等待（下方 effect 会重跑），避免预置策略控制台刷 404 红字。
     if (!presets) {
       setLoading(true)
       return
@@ -110,9 +112,9 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
         const loadedRule = d.rule || createGroup('AND')
         setName(d.name || ruleKey)
         setDesc(d.description || '')
-        // 用函数式更新：保留 [tree] effect 可能已补上的 global，避免竞态覆盖（发现 #5）
+        // 压平为扁平 AND（同花顺式编辑器不支持嵌套组）
         setRule((prev) => ({
-          ...loadedRule,
+          ...flatten(loadedRule),
           global: loadedRule.global || prev.global || (tree ? defaultGlobal(tree) : undefined),
         }))
         if ((loadedRule.items?.length || 0) === 0) autoFillPreset(ruleKey)
@@ -144,7 +146,7 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
     const preset = presets.presets[key]
     if (!preset) return
     if (autoFilledRef.current.has(key)) return
-    const r = applyPreset(preset.rule)
+    const r = flatten(applyPreset(preset.rule))
     if (tree) r.global = defaultGlobal(tree)
     setRule(r)
     setName(presets.names[key] || key)
@@ -155,6 +157,17 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
   }
 
   const emptyRule = (rule.items?.length || 0) === 0
+
+  const findBetweenMissing = (group: any): string[] => {
+    const miss: string[] = []
+    for (const node of group.items || []) {
+      if (node.type === 'group') miss.push(...findBetweenMissing(node))
+      else if (node.type === 'condition' && node.operator === 'between') {
+        if (node.targetValue == null || node.targetParam2 == null) miss.push(node.indicator)
+      }
+    }
+    return miss
+  }
 
   const handleSave = async () => {
     const finalKey = keyInput.trim() || ruleKey.trim()
@@ -200,7 +213,6 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
     }
   }
 
-  // 把生成的代码复制到剪贴板
   const handleCopyCode = async () => {
     try {
       await navigator.clipboard.writeText(codeText)
@@ -210,7 +222,6 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
     }
   }
 
-  // 把生成的代码保存为自定义策略（之后可在「回测」页直接选用）
   const handleSaveAsCustom = async () => {
     const key = (keyInput.trim() || ruleKey.trim() || 'visual_strategy').replace(/[^a-zA-Z0-9_-]/g, '_')
     try {
@@ -222,7 +233,6 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
   }
 
   // 立即回测：生成代码并执行，结果存入 store 后跳转到结果页
-  // 表单提交值：{ symbol, range: [dayjs, dayjs], cash }
   const handleRunBacktest = async (vals: {
     symbol: string
     range?: [dayjs.Dayjs, dayjs.Dayjs]
@@ -262,122 +272,16 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
     }
   }
 
-  const findBetweenMissing = (group: any): string[] => {
-    const miss: string[] = []
-    for (const node of group.items || []) {
-      if (node.type === 'group') miss.push(...findBetweenMissing(node))
-      else if (node.type === 'condition' && node.operator === 'between') {
-        if (node.targetValue == null || node.targetParam2 == null) miss.push(node.indicator)
-      }
-    }
-    return miss
-  }
-
-  // 点击左侧指标 → 添加一条默认条件到顶层（自然语言，来自后端 default_conditions）
-  const onTreeSelect = (indKey: string) => {
-    const leaf = makeLeaf(indKey)
-    setRule((prev) => ({ ...prev, items: [...prev.items, leaf] }))
-    setEditingId(leaf.id)
-  }
-
-  // 按指标 key 同步更新该指标下所有叶子的参数（按 id 递归，支持嵌套组）
-  // 用函数式 setState，并基于 prev 中该指标已有 params 合并增量，
-  // 避免快速连续改同一指标不同参数时基于过期快照丢失前一次修改（发现 #1 + 第四轮加固）
-  const handleChangeParams = (indicatorKey: string, paramPatch: Record<string, number>) => {
-    setRule((prev) => {
-      const targetIds = collectLeaves(prev.items)
-        .filter((lf) => lf.indicator === indicatorKey)
-        .map((lf) => lf.id)
-      let items: ConditionNode[] = prev.items
-      for (const id of targetIds) {
-        items = updateNodeById(items, id, (n) => {
-          const leaf = n as ConditionLeaf
-          return { ...leaf, params: { ...leaf.params, ...paramPatch } }
-        })
-      }
-      return { ...prev, items }
-    })
-  }
-
-  // 顶层添加条件（用第一个可用指标）
-  // 用函数式 setState 避免快速双击时两次基于同一过期 items 导致第一条被覆盖（发现 #2）
-  const addLeaf = (groupId?: string) => {
-    const first = tree?.groups?.[0]?.indicators?.[0]
-    if (!first) return
-    const leaf = makeLeaf(first.key)
-    setRule((prev) => {
-      if (groupId) {
-        return {
-          ...prev,
-          items: updateNodeById(prev.items, groupId, (n) => {
-            const g = n as ConditionGroup
-            return { ...g, items: [...g.items, leaf] }
-          }),
-        }
-      }
-      return { ...prev, items: [...prev.items, leaf] }
-    })
-    setEditingId(leaf.id)
-  }
-  // 生成一条默认条件（抽到函数，供 addLeaf 复用）
-  const makeLeaf = (indKey: string): ConditionLeaf => {
-    let def: any = null
-    for (const g of tree?.groups || []) {
-      def = g.indicators.find((i: any) => i.key === indKey)
-      if (def) break
-    }
-    if (!def) return createLeaf({ key: indKey })
-    const params: Record<string, number> = {}
-    for (const p of def.params || []) params[p.name] = p.default
-    const dc = tree?.default_conditions?.[indKey]
-    // 用 tree 默认 global 的 timeframe，而非闭包中的 rule.global 快照，
-    // 避免先改全局周期再点指标时新叶子用了旧周期（第四轮发现）
-    const tf = (tree ? defaultGlobal(tree).timeframe : 'daily')
-    return {
-      id: newId(),
-      type: 'condition',
-      indicator: indKey,
-      line: dc?.line ?? def.lines?.[0]?.value ?? '',
-      params,
-      timeframe: tf,
-      operator: dc?.operator ?? def.operators?.[0] ?? 'greater',
-      targetType: (dc?.targetType as ConditionLeaf['targetType']) ?? 'value',
-      targetValue: dc?.targetValue ?? 0,
-      targetParam2: dc?.targetParam2 ?? 0,
-      targetIndicator: dc?.targetIndicator ?? undefined,
-    }
-  }
-  const addSubGroup = (groupId?: string) => {
-    const g = createGroup('OR')
-    setRule((prev) => {
-      if (groupId) {
-        return {
-          ...prev,
-          items: updateNodeById(prev.items, groupId, (n) => {
-            const grp = n as ConditionGroup
-            return { ...grp, items: [...grp.items, g] }
-          }),
-        }
-      }
-      return { ...prev, items: [...prev.items, g] }
-    })
-  }
-
-  // 全局设置变更：同步更新所有叶子的 timeframe，保持全局周期统一（发现 #9）
+  // 全局设置变更：同步更新所有叶子的 timeframe，保持全局周期统一
   const updateRuleGlobal = (g: VisualGlobal) => {
-    setRule((prev) => {
-      const syncTimeframe = (items: ConditionNode[]): ConditionNode[] =>
-        items.map((n) =>
-          n.type === 'condition'
-            ? { ...n, timeframe: g.timeframe }
-            : n.type === 'group'
-              ? { ...n, items: syncTimeframe(n.items) }
-              : n,
-        )
-      return { ...prev, global: g, items: syncTimeframe(prev.items) }
-    })
+    setRule((prev) => ({
+      ...prev,
+      global: g,
+      items: prev.items.map((n) =>
+        n.type === 'condition' ? { ...n, timeframe: g.timeframe } : n,
+      ),
+    }))
   }
-  const updateRule = (next: VisualRule) => setRule(next)
 
   const handlePresetChange = (key: string | undefined) => {
     setPresetKey(key)
@@ -385,7 +289,7 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
     const preset = presets.presets[key]
     if (!preset) return
     const apply = () => {
-      const r = applyPreset(preset.rule)
+      const r = flatten(applyPreset(preset.rule))
       if (tree) r.global = defaultGlobal(tree)
       setRule(r)
       setName(presets.names[key] || key)
@@ -398,7 +302,16 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
     } else apply()
   }
 
+  // FactorEditor 的条件变化：保持扁平（items 就是一组叶子）
+  const handleFactorChange = (next: VisualRule) => {
+    setRule((prev) => ({ ...next, global: next.global || prev.global }))
+  }
+
   if (!tree) return <div style={{ padding: 24 }}><Empty description="加载中…" /></div>
+
+  const presetOptions = presets
+    ? Object.keys(presets.presets).map((k) => ({ key: k, name: presets.names[k] || k }))
+    : []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -406,14 +319,14 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
       <div style={{ padding: '8px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer }}>
         <Space wrap>
           <span style={{ color: token.colorTextSecondary, fontSize: 12 }}>策略key</span>
-          <Input size="small" style={{ width: 160 }} placeholder="如 my_rule（必填）" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} />
+          <Input size="small" style={{ width: 150 }} placeholder="如 my_rule（必填）" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} />
           <span style={{ color: token.colorTextSecondary, fontSize: 12 }}>策略名称</span>
-          <Input size="small" style={{ width: 180 }} placeholder="可视化策略名称" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input size="small" style={{ width: 170 }} placeholder="可视化策略名称" value={name} onChange={(e) => setName(e.target.value)} />
           {presets && Object.keys(presets.presets).length > 0 && (
             <Tooltip title="选择预置策略，自动预填推荐条件">
-              <Select size="small" style={{ width: 170 }} placeholder="智能推荐…" value={presetKey} onChange={handlePresetChange}
+              <Select size="small" style={{ width: 160 }} placeholder="智能推荐…" value={presetKey} onChange={handlePresetChange}
                 suffixIcon={<BulbOutlined />}
-                options={Object.keys(presets.presets).map((k) => ({ value: k, label: presets.names[k] || k }))} />
+                options={presetOptions.map((o) => ({ value: o.key, label: o.name }))} />
             </Tooltip>
           )}
           <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存策略</Button>
@@ -437,41 +350,15 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
         onChange={updateRuleGlobal}
       />
 
-      {/* 三栏主体：左指标树 / 中参数 / 右条件预览 */}
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        {/* 左：指标树 */}
-        <div style={{ width: 210, borderRight: `1px solid ${token.colorBorderSecondary}`, overflow: 'auto' }}>
-          <IndicatorTree
-            groups={tree.groups}
-            recommendedIndicators={presetKey && presets?.presets[presetKey] ? presets.presets[presetKey].recommended_indicators : undefined}
-            onSelect={onTreeSelect}
-          />
-        </div>
-
-        {/* 中：参数面板 */}
-        <div style={{ width: 260, borderRight: `1px solid ${token.colorBorderSecondary}`, overflow: 'auto' }}>
-          <ParameterPanel groups={tree.groups} rule={rule} onChangeParams={handleChangeParams} />
-        </div>
-
-        {/* 右：条件预览 + 编辑 */}
-        <div style={{ flex: 1, padding: 12, overflow: 'auto' }}>
-          <Space style={{ marginBottom: 8 }} size={6}>
-            <AppstoreOutlined style={{ color: token.colorPrimary }} />
-            <Text strong>条件设置（自然语言）</Text>
-          </Space>
-          {emptyRule && <Empty description="从左侧点击指标，或点击下方「添加条件」开始构建" />}
-          <ConditionPreview
-            group={rule as any}
-            groups={tree.groups}
-            editingId={editingId}
-            onChange={updateRule}
-            onStartEdit={setEditingId}
-            onStopEdit={() => setEditingId(null)}
-            onAddLeaf={(groupId?: string) => addLeaf(groupId)}
-            onAddSubGroup={(groupId?: string) => addSubGroup(groupId)}
-            recommendedIndicators={presetKey && presets?.presets[presetKey] ? presets.presets[presetKey].recommended_indicators : undefined}
-          />
-        </div>
+      {/* 主体：同花顺式因子标签块编辑器 */}
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <FactorEditor
+          rule={rule}
+          tree={tree}
+          onChange={handleFactorChange}
+          presets={presetOptions}
+          onLoadPreset={handlePresetChange}
+        />
       </div>
 
       {/* JSON 预览抽屉 */}
@@ -481,7 +368,7 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
         </pre>
       </Drawer>
 
-      {/* 生成代码弹窗：可视化条件 → Backtrader 策略代码 */}
+      {/* 生成代码弹窗 */}
       <Modal
         title="生成的 Backtrader 策略代码"
         open={codeOpen}
