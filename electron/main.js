@@ -74,20 +74,14 @@ function showPythonMissingDialog() {
   app.quit()
 }
 
-/** 清理占用指定端口的进程 + 杀掉所有残留 Python 进程（Windows） */
+/** 清理占用指定端口的进程（Windows，精确按端口匹配） */
 function killPortProcess(port) {
   if (process.platform !== 'win32') return
   const { execSync } = require('child_process')
-  
-  // 1. 杀掉所有 python / pythonw 进程（彻底清理上一个实例的残留）
-  try {
-    console.log('[electron] 清理所有残留 Python 进程...')
-    execSync('taskkill /F /IM python.exe 2>nul & taskkill /F /IM pythonw.exe 2>nul', { timeout: 5000 })
-  } catch (e) {
-    // 没有进程在运行时会报错，忽略
-  }
-  
-  // 2. 精确清理占用目标端口的进程
+
+  // 精确清理占用目标端口的进程。
+  // 注意：不再按映像名全杀 python.exe——那会误杀用户机器上无关的
+  // Python 进程；上一实例的残留由后端自身的父进程看门狗负责自动退出。
   try {
     const output = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', timeout: 3000 })
     const lines = output.trim().split('\n')
@@ -171,6 +165,9 @@ function startBackend() {
     env.PATH = `${pythonDir};${env.PATH || ''}`
     console.log(`[electron] 已添加 Python 到 PATH: ${pythonDir}`)
   }
+  // 防孤儿看门狗：告知后端本主进程的 PID，主进程一旦退出（含崩溃/被强杀），
+  // 后端自动结束，不再残留后台 python.exe
+  env.QUANT_PARENT_PID = String(process.pid)
 
   backendProcess = spawn(pythonPath, ['-u', 'main.py'], {
     cwd: backendDir,
@@ -256,21 +253,32 @@ function waitForBackend(retries = 30, interval = 1000) {
   })
 }
 
-/** 停止后端（Windows 上需杀死整个进程树 + 所有 Python） */
+/** 停止后端：精确杀死后端进程树（不误杀系统上其他 Python 进程） */
 function stopBackend() {
   if (process.platform === 'win32') {
-    // 彻底清理：先杀进程树，再杀所有残留 Python
-    if (backendProcess) {
-      console.log('[electron] 正在停止后端进程树...')
+    // 1. 杀后端进程树（shell:true 时 pid 是中间层 cmd.exe，/T 会连同 python 一起杀）
+    if (backendProcess && backendProcess.pid) {
+      console.log(`[electron] 正在停止后端进程树 (PID ${backendProcess.pid})...`)
       try {
-        require('child_process').execSync(`taskkill /PID ${backendProcess.pid} /F /T 2>nul`, { timeout: 5000 })
-      } catch (e) { /* ignore */ }
+        require('child_process').execSync(`taskkill /PID ${backendProcess.pid} /F /T`, { timeout: 5000, stdio: 'ignore' })
+      } catch (e) { /* 进程已退出则忽略 */ }
       backendProcess = null
     }
-    // 确保所有 Python 进程都被杀掉
+    // 2. 兜底：杀掉仍占用后端端口的残留进程（只按端口精确匹配，
+    //    不再按映像名全杀 python.exe——那会误杀用户机器上无关的 Python）
     try {
-      require('child_process').execSync('taskkill /F /IM python.exe 2>nul & taskkill /F /IM pythonw.exe 2>nul', { timeout: 5000 })
-    } catch (e) { /* ignore - 没有进程时命令返回非零 */ }
+      const { execSync } = require('child_process')
+      const output = execSync(`netstat -ano | findstr :${BACKEND_PORT}`, { encoding: 'utf8', timeout: 3000 })
+      const pids = new Set()
+      for (const line of output.trim().split('\n')) {
+        const m = line.match(new RegExp(`:${BACKEND_PORT}\\s+.*LISTENING\\s+(\\d+)`))
+        if (m) pids.add(m[1])
+      }
+      for (const pid of pids) {
+        console.log(`[electron] 清理端口 ${BACKEND_PORT} 残留 PID ${pid}`)
+        try { execSync(`taskkill /PID ${pid} /F /T`, { timeout: 3000, stdio: 'ignore' }) } catch (e) { /* ignore */ }
+      }
+    } catch (e) { /* 端口已无人监听，findstr 返回非零属正常 */ }
     console.log('[electron] 后端已完全停止')
   } else {
     if (backendProcess) {
@@ -428,4 +436,14 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   stopBackend()
+})
+
+// 主进程 JS 层退出的最后一刻兜底（同步操作）：崩溃等未走 before-quit 的
+// 场景由此尽量杀掉后端进程树；原生崩溃则由后端看门狗在 3 秒内自清。
+process.on('exit', () => {
+  if (backendProcess && backendProcess.pid && process.platform === 'win32') {
+    try {
+      require('child_process').execSync(`taskkill /PID ${backendProcess.pid} /F /T`, { timeout: 3000, stdio: 'ignore' })
+    } catch (e) { /* ignore */ }
+  }
 })

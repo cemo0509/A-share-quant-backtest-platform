@@ -215,6 +215,13 @@ def health_check():
 if __name__ == "__main__":
     import time as _time
 
+    # 桌面版防孤儿后端：Electron 通过 QUANT_PARENT_PID 传入主进程 PID，
+    # 主进程一旦退出（含崩溃/被强杀），本进程自动结束，不再残留后台。
+    # 手动 `python main.py` 运行时无此环境变量，看门狗不启用，行为不变。
+    from core.parent_watchdog import start_parent_watchdog
+    if start_parent_watchdog():
+        logger.info("桌面版父进程看门狗已启用")
+
     reload_mode = not _is_packaged
     # 打包环境下：TIME_WAIT 最长可能 120s，给予充足重试窗口
     max_retries = 30 if _is_packaged else 1
