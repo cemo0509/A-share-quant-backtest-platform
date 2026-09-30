@@ -37,6 +37,16 @@ export const getCustomStrategyCode = (key: string) => api.get(`/strategy/custom/
 export const saveCustomStrategy = (key: string, code: string) => api.post('/strategy/custom/save', { key, code })
 export const deleteCustomStrategy = (key: string) => api.delete(`/strategy/custom/${key}`)
 
+// 参数化策略变体：预置策略 key + 参数字典 → 一条新策略（不覆盖原策略）
+export const saveVariant = (data: {
+  key: string
+  name: string
+  base_key: string
+  params: Record<string, any>
+  description?: string
+}) => api.post('/strategy/variant/save', data)
+export const deleteVariant = (key: string) => api.delete(`/strategy/variant/${key}`)
+
 // ===== 数据 =====
 export const fetchData = (data: { symbol: string; start_date: string; end_date: string; period?: string }) =>
   api.post('/data/fetch', data)

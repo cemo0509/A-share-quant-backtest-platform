@@ -164,6 +164,10 @@ def run_backtest(
             raise ValueError("必须提供 strategy_key 或 strategy_cls")
         strat_info = get_strategy(strategy_key)
         strategy_cls = strat_info.strategy_cls
+        # 参数化变体：调用方没显式传参时（例如从策略列表直接回测），用固化的参数。
+        # 否则「另存为新策略」保存的 8/30 会退化成策略类默认值 5/20，变体就失去意义。
+        if not params and getattr(strat_info, "preset_params", None):
+            params = dict(strat_info.preset_params)
 
     # 统一处理 symbol 前缀：去除 sh/sz 前缀（data_loader 需要纯数字代码）
     symbol = str(symbol).lower().replace('sh', '').replace('sz', '').strip()

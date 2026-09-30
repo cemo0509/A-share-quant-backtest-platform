@@ -30,6 +30,7 @@ const pages = {
   Dashboard: () => import('./pages/Dashboard'),
   Backtest: () => import('./pages/Backtest'),
   StrategyEditor: () => import('./pages/StrategyEditor'),
+  CustomStrategy: () => import('./pages/CustomStrategy'),
   DataManage: () => import('./pages/DataManage'),
   Results: () => import('./pages/Results'),
   RealtimeQuotes: () => import('./components/RealtimeQuotes'),
@@ -45,6 +46,7 @@ const pages = {
 const Dashboard = lazy(pages.Dashboard)
 const Backtest = lazy(pages.Backtest)
 const StrategyEditor = lazy(pages.StrategyEditor)
+const CustomStrategy = lazy(pages.CustomStrategy)
 const DataManage = lazy(pages.DataManage)
 const Results = lazy(pages.Results)
 const RealtimeQuotes = lazy(pages.RealtimeQuotes)
@@ -67,6 +69,7 @@ const routePreload: Record<string, () => Promise<any>> = {
   '/optimize': pages.Optimize,
   '/compare': pages.Compare,
   '/strategy': pages.StrategyEditor,
+  '/custom-strategy': pages.CustomStrategy,
   '/data': pages.DataManage,
   '/results': pages.Results,
   '/realtime': pages.RealtimeQuotes,
@@ -123,6 +126,7 @@ const menuItems = [
     label: '策略',
     children: [
       { key: '/strategy', icon: <CodeOutlined />, label: '策略编辑' },
+      { key: '/custom-strategy', icon: <BulbOutlined />, label: '自定义策略' },
     ],
   },
   {
@@ -233,6 +237,7 @@ function AppLayout() {
               <Route path="/optimize" element={<Optimize />} />
               <Route path="/compare" element={<Compare />} />
               <Route path="/strategy" element={<StrategyEditor />} />
+              <Route path="/custom-strategy" element={<CustomStrategy />} />
               <Route path="/data" element={<DataManage />} />
               <Route path="/results" element={<Results />} />
               <Route path="/realtime" element={<RealtimeQuotes />} />

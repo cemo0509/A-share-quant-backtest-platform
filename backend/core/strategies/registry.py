@@ -22,6 +22,7 @@ from .smart_exit_strategy import SmartExitStrategy
 from .factor_strategy import FactorScoreStrategy
 from .cci_macd_selection import CCIMACDSelectionStrategy
 from .custom_manager import list_custom_strategies, load_custom_strategy_class
+from .variant_manager import get_variant, list_variants, build_params_with_defaults
 
 
 @dataclass
@@ -34,6 +35,8 @@ class StrategyInfo:
     strategy_cls: Optional[Type[bt.Strategy]] = None  # 自定义策略可能为None
     params: list[dict] = field(default_factory=list)
     is_custom: bool = False  # 是否为自定义策略
+    # 参数化变体的固化参数：回测时若调用方未显式传 params，则用它（见 engine.run_backtest）
+    preset_params: Optional[dict] = None
     # 可视化编辑器「智能推荐」默认规则（贴合前端 ConditionLeaf 模型）。
     # 形如 {"operator": "AND", "items": [ {type:"condition",...}, ... ], "recommended_indicators": [...]}
     visual_defaults: Optional[dict] = None
@@ -336,7 +339,24 @@ def get_strategy(key: str) -> StrategyInfo:
     # 先查预置策略
     if key in REGISTRY:
         return REGISTRY[key]
-    
+
+    # 再查参数化变体：预置策略 + 固化参数（不存代码，直接复用基础策略类）
+    v = get_variant(key)
+    if v:
+        base = REGISTRY.get(v.get("base_key"))
+        if base is not None:
+            return StrategyInfo(
+                key=key,
+                name=v.get("name") or key,
+                description=v.get("description") or f"基于「{base.name}」的参数变体",
+                category=base.category,
+                strategy_cls=base.strategy_cls,
+                # default 替换为固化值，前端既能显示又能在此基础上微调
+                params=build_params_with_defaults(v["base_key"], v.get("params") or {}),
+                is_custom=True,
+                preset_params=dict(v.get("params") or {}),
+            )
+
     # 再查自定义策略
     try:
         strategy_cls = load_custom_strategy_class(key)
@@ -374,7 +394,7 @@ def list_strategies() -> list[dict]:
         for s in REGISTRY.values()
     ]
 
-    # 自定义策略
+    # 自定义策略（Python 源码）
     try:
         custom_list = list_custom_strategies()
         for custom_info in custom_list:
@@ -385,6 +405,22 @@ def list_strategies() -> list[dict]:
                 "category": "trading",  # 自定义策略默认归为操盘策略
                 "params": [],
                 "type": "custom",
+            })
+    except Exception:
+        pass
+
+    # 参数化变体（预置策略 + 固化参数）：带完整 params，前端可直接渲染输入框
+    try:
+        for v in list_variants():
+            base = REGISTRY.get(v.get("base_key"))
+            result.append({
+                "key": v["key"],
+                "name": v.get("name") or v["key"],
+                "description": v.get("description") or "",
+                "category": base.category if base else "trading",
+                "params": build_params_with_defaults(v["base_key"], v.get("params") or {}),
+                "type": "variant",
+                "base_key": v.get("base_key"),
             })
     except Exception:
         pass

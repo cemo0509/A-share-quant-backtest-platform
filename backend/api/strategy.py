@@ -10,7 +10,8 @@ from core.strategies.custom_manager import (
     delete_custom_strategy,
     list_custom_strategies,
 )
-from models.schemas import SaveStrategyRequest
+from core.strategies.variant_manager import save_variant, delete_variant, get_variant
+from models.schemas import SaveStrategyRequest, VariantSaveRequest
 
 router = APIRouter()
 
@@ -19,6 +20,30 @@ router = APIRouter()
 def get_strategies():
     """返回所有策略（预置 + 自定义）及其可配置参数。"""
     return {"status": "ok", "data": list_strategies()}
+
+
+@router.post("/variant/save")
+def save_variant_api(req: VariantSaveRequest):
+    """保存参数化策略变体：预置策略 key + 参数字典 → 一条新策略。
+
+    原预置策略保持不变（「另存为」语义），新策略可被列表返回、可被回测调用。
+    """
+    try:
+        info = save_variant(req.key, req.name, req.base_key, req.params, req.description)
+        return {"status": "ok", "data": info}
+    except ValueError as e:
+        # 参数/命名问题属调用方可修正，用 400 明确告知而非 500
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/variant/{key}")
+def delete_variant_api(key: str):
+    """删除参数化策略变体。"""
+    try:
+        delete_variant(key)
+        return {"status": "ok", "message": "策略已删除"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/{key}")

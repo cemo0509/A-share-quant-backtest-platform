@@ -358,6 +358,19 @@ class ScreenerRequest(BaseModel):
     prepare_first: bool = Field(True, description="是否先批量预热数据到本地缓存")
 
 
+class VariantSaveRequest(BaseModel):
+    """参数化策略变体保存请求（预置策略 key + 参数字典 → 一条新策略）。
+
+    与 SaveStrategyRequest（存 Python 源码）不同：这里只存参数、不存代码，
+    既避开代码注入面，也保证原预置策略不被覆盖（「另存为」语义）。
+    """
+    key: str = Field(..., description="新策略 key，不得与已有策略重名")
+    name: str = Field(..., description="新策略名称")
+    base_key: str = Field(..., description="基础预置策略 key，如 dual_ma")
+    params: dict = Field(default_factory=dict, description="固化的参数字典")
+    description: str = Field("", description="策略说明")
+
+
 class ExportJsonRequest(BaseModel):
     """JSON 导出请求。"""
     result: dict

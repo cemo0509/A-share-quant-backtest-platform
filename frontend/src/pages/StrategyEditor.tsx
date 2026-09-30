@@ -1,45 +1,61 @@
 import { useEffect, useState } from 'react'
-import { Card, Typography, Input, Button, Select, Space, message, Layout, Splitter, Empty, Popconfirm, Radio, Alert, Tag, theme } from 'antd'
-import { SaveOutlined, DeleteOutlined, CodeOutlined, AimOutlined } from '@ant-design/icons'
-import { getStrategies, getCustomStrategyCode, saveCustomStrategy, deleteCustomStrategy } from '../services/api'
-import { listVisualRules, deleteVisualRule } from '../api'
-import Editor from '@monaco-editor/react'
-import VisualEditor from '../components/visual-editor/VisualEditor'
+import { useNavigate } from 'react-router-dom'
+import {
+  Alert, Button, Card, DatePicker, Empty, Input, InputNumber, Layout, Modal,
+  Popconfirm, Space, Splitter, Tag, Typography, message, theme,
+} from 'antd'
+import { DeleteOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
+import {
+  getStrategies, listVisualRules, deleteVisualRule, deleteCustomStrategy,
+  deleteVariant, runBacktest, saveVariant,
+} from '../api'
+import { useStore } from '../stores'
+import StrategyParamsForm, { initParamValues } from '../components/StrategyParamsForm'
+import type { StrategyItem, ParamValues } from '../types'
 
 const { Title, Paragraph, Text } = Typography
-const { TextArea } = Input
+const { RangePicker } = DatePicker
 
-// 策略模板（集中管理所有预置策略代码）
-import { STRATEGY_TEMPLATES, PRESET_STRATEGY_CODES } from './strategyTemplates'
+const KEY_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
 
-// 编辑模式
-type EditMode = 'code' | 'visual'
-
+/** 页面 A：策略编辑器 —— 只做「选中策略 → 调它的参数」。
+ *
+ * 「从零造策略」不在这里：可视化编辑器已迁到独立的「自定义策略」页。
+ * 因此本页不再包含指标库 / 条件积木 / 环境设置，也不再有代码编辑器。
+ */
 export default function StrategyEditor() {
   const { token } = theme.useToken()
-  const [strategies, setStrategies] = useState<{ key: string; name: string; type: string; category?: string }[]>([])
-  const [selectedKey, setSelectedKey] = useState<string>('')
-  const [code, setCode] = useState<string>('')
-  const [saving, setSaving] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [editMode, setEditMode] = useState<EditMode>('code')
+  const navigate = useNavigate()
+  const { setResult } = useStore()
 
-  // 加载策略列表（预置 + 自定义 + 可视化）
+  const [strategies, setStrategies] = useState<StrategyItem[]>([])
+  const [selectedKey, setSelectedKey] = useState<string>('')
+  const [paramValues, setParamValues] = useState<ParamValues>({})
+
+  // 回测所需的必要输入（股票代码 / 区间 / 初始资金）
+  const [symbol, setSymbol] = useState('000001')
+  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(
+    [dayjs('2024-01-01'), dayjs('2025-06-30')],
+  )
+  const [cash, setCash] = useState(1000000)
+
+  const [running, setRunning] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [newKey, setNewKey] = useState('')
+  const [newName, setNewName] = useState('')
+
   const loadStrategies = () => {
     Promise.all([
-      getStrategies().then((r: any) => (r.data.data || []) as any[]),
-      listVisualRules().then((r) => r.data.data as any[]).catch(() => []),
+      getStrategies().then((r: any) => (r.data.data || []) as StrategyItem[]),
+      listVisualRules().then((r: any) => r.data.data as any[]).catch(() => []),
     ])
       .then(([presets, visuals]) => {
-        const merged = [...presets]
-        // 把可视化规则并入自定义类别，标记 category=visual
-        for (const v of visuals) {
-          merged.push({ ...v, category: 'visual' })
-        }
+        const merged: StrategyItem[] = [...presets]
+        for (const v of visuals) merged.push({ ...v, category: 'visual' })
         setStrategies(merged)
-        if (!selectedKey && merged.length > 0) {
-          setSelectedKey(merged[0].key)
-        }
+        if (!selectedKey && merged.length > 0) setSelectedKey(merged[0].key)
       })
       .catch(() => message.warning('策略列表加载失败'))
   }
@@ -48,329 +64,303 @@ export default function StrategyEditor() {
     loadStrategies()
   }, [])
 
-  // 加载选中的策略代码 / 可视化规则
+  const current = strategies.find((s) => s.key === selectedKey)
+
+  // 切换策略时立刻用「该策略自己的参数定义」重置表单。
+  // 参数是单一 selectedKey 驱动，切换不留上一个策略的残留值。
   useEffect(() => {
-    if (!selectedKey) return
-    
-    const strategy = strategies.find((s) => s.key === selectedKey)
-    if (!strategy) return
-    
-    // 可视化策略：切换到可视化模式（规则由 VisualEditor 自行加载）
-    if (strategy.category === 'visual') {
-      setEditMode('visual')
-      setCode('')
+    if (!current) {
+      setParamValues({})
       return
     }
-
-    // 非可视化策略（预置/自定义 Python）：确保退出可视化模式，避免对不存在的 key 发起 load 请求（404）
-    if (editMode === 'visual') {
-      setEditMode('code')
-    }
-
-    if (strategy.type === 'custom') {
-      // 加载自定义策略代码
-      setLoading(true)
-      getCustomStrategyCode(selectedKey)
-        .then((res) => {
-          setCode(res.data.data.code)
-        })
-        .catch(() => {
-          message.error('加载策略代码失败')
-          setCode('')
-        })
-        .finally(() => setLoading(false))
-    } else {
-      // 预置策略，显示代码（编程模式可见）
-      const presetCode = getPresetStrategyCode(selectedKey)
-      setCode(presetCode)
-    }
+    setParamValues(initParamValues(current.params || []))
   }, [selectedKey, strategies])
 
-  // 获取预置策略的代码（用于展示）
-  const getPresetStrategyCode = (key: string): string => {
-    return PRESET_STRATEGY_CODES[key] || '# 预置策略代码不可见'
+  const presetStrategies = strategies.filter((s) => s.type === 'preset')
+  const variantStrategies = strategies.filter((s) => s.type === 'variant')
+  const customStrategies = strategies.filter((s) => s.type === 'custom')
+
+  const isScreening = current?.category === 'screening'
+
+  const handleRunBacktest = async () => {
+    if (!current) return
+    if (!range || range.length !== 2) {
+      message.warning('请选择回测区间')
+      return
+    }
+    setRunning(true)
+    try {
+      const res = await runBacktest({
+        strategy: current.key,
+        symbol,
+        start_date: range[0].format('YYYYMMDD'),
+        end_date: range[1].format('YYYYMMDD'),
+        params: paramValues,
+        cash,
+      })
+      const data = res.data?.data
+      if (!data) {
+        message.error('回测未返回结果')
+        return
+      }
+      setResult(data)
+      message.success('回测完成')
+      navigate('/results')
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '回测失败')
+    } finally {
+      setRunning(false)
+    }
   }
 
-  // 选股类（screening）预置策略：引导到实时选股池配置
-  const selectedScreening = strategies.find((s) => s.key === selectedKey)?.category === 'screening'
+  const openSaveAs = () => {
+    if (!current) return
+    setNewKey('')
+    setNewName(`${current.name} 副本`)
+    setSaveOpen(true)
+  }
 
-  // 保存策略
-  const handleSave = async () => {
-    if (!selectedKey) {
-      message.warning('请先输入策略key')
+  const handleSaveAs = async () => {
+    if (!current) return
+    const key = newKey.trim()
+    if (!key) {
+      message.warning('请输入新策略 key')
       return
     }
-    
-    // 检查是否为预置策略
-    const strategy = strategies.find((s) => s.key === selectedKey)
-    if (strategy && strategy.type !== 'custom') {
-      message.error('不能覆盖预置策略，请使用新的key')
+    if (!KEY_RE.test(key)) {
+      message.warning('key 只能包含字母、数字、下划线和连字符，且以字母开头')
       return
     }
-    
+    // 变体基于「它自己的基础策略」，避免变体套变体
+    const baseKey = current.type === 'variant' ? (current.base_key || current.key) : current.key
     setSaving(true)
     try {
-      await saveCustomStrategy(selectedKey, code)
-      message.success('策略保存成功')
-      loadStrategies() // 刷新列表
+      await saveVariant({
+        key,
+        name: newName.trim() || key,
+        base_key: baseKey,
+        params: paramValues,
+        description: `基于「${current.name}」的参数变体`,
+      })
+      message.success(`已另存为新策略「${key}」，原策略保持不变`)
+      setSaveOpen(false)
+      await loadStrategies()
+      setSelectedKey(key)
     } catch (e: any) {
-      const detail = e?.response?.data?.detail
-      message.error(detail || '保存失败')
+      message.error(e?.response?.data?.detail || '保存失败')
     } finally {
       setSaving(false)
     }
   }
 
-  // 删除策略（自定义 Python / 可视化规则）
   const handleDelete = async () => {
-    if (!selectedKey) return
-    const strategy = strategies.find((s) => s.key === selectedKey)
+    if (!current) return
     try {
-      if (strategy?.category === 'visual') {
-        await deleteVisualRule(selectedKey)
+      if (current.type === 'variant') {
+        await deleteVariant(current.key)
+      } else if (current.category === 'visual') {
+        await deleteVisualRule(current.key)
       } else {
-        await deleteCustomStrategy(selectedKey)
+        await deleteCustomStrategy(current.key)
       }
-      message.success('策略删除成功')
+      message.success('策略已删除')
       setSelectedKey('')
-      setCode('')
-      loadStrategies() // 刷新列表
+      loadStrategies()
     } catch (e: any) {
-      const detail = e?.response?.data?.detail
-      message.error(detail || '删除失败')
+      message.error(e?.response?.data?.detail || '删除失败')
     }
   }
 
-  // 创建新策略
-  const handleNew = (templateKey: string) => {
-    if (templateKey === 'visual') {
-      setSelectedKey('')
-      setCode('')
-      setEditMode('visual')
-      message.info('已新建「可视化策略」，请在右侧输入策略key并添加条件后保存')
-      return
-    }
-    const template = STRATEGY_TEMPLATES[templateKey as keyof typeof STRATEGY_TEMPLATES]
-    if (!template) return
-    
-    setSelectedKey('')
-    setCode(template.code)
-    setEditMode('code')
-    message.info(`已创建 "${template.name}" 模板，请修改策略key后保存`)
-  }
-
-  // 自定义策略列表
-  const customStrategies = strategies.filter((s) => s.type === 'custom')
-  const presetStrategies = strategies.filter((s) => s.type === 'preset')
+  const renderItem = (s: StrategyItem) => (
+    <div
+      key={s.key}
+      onClick={() => setSelectedKey(s.key)}
+      style={{
+        padding: '8px 12px',
+        cursor: 'pointer',
+        backgroundColor: selectedKey === s.key ? token.controlItemBgActive : 'transparent',
+        borderRadius: 4,
+        marginBottom: 4,
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      }}
+    >
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+      {s.type === 'variant' && <Tag color="blue" style={{ marginRight: 0 }}>参数变体</Tag>}
+      {s.category === 'visual' && <Tag color="purple" style={{ marginRight: 0 }}>可视化</Tag>}
+    </div>
+  )
 
   return (
     <div>
       <Title level={3}>策略编辑器</Title>
       <Paragraph type="secondary">
-        编写自定义Python策略代码，支持Backtrader框架。保存后可在回测页面选择使用。
-        预置策略的代码在编程模式下可见。
+        选中一个策略，调整它自己的参数后可直接回测，或「另存为新策略」把当前参数固化成一条新策略（原策略不会被修改）。
+        要从零组合条件创建新策略，请使用「自定义策略」页。
       </Paragraph>
 
       <Layout style={{ marginTop: 16, height: 'calc(100vh - 250px)' }}>
         <Splitter>
-          {/* 左侧：策略列表 */}
           <Splitter.Panel defaultSize={250} min={200} max={400}>
-            <Card 
-              title="策略列表" 
+            <Card
+              title="策略列表"
               size="small"
-              extra={
-                <Select
-                  value=""
-                  onChange={handleNew}
-                  style={{ width: 120 }}
-                  placeholder="新建策略"
-                  options={[
-                    { value: 'visual', label: '可视化策略' },
-                    { value: 'empty', label: '空模板' },
-                    { value: 'dual_ma', label: '双均线模板' },
-                  ]}
-                />
-              }
               style={{ height: '100%', overflow: 'auto' }}
             >
               {presetStrategies.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
                   <Text strong>预置策略</Text>
-                  {presetStrategies.map((s) => (
-                    <div
-                      key={s.key}
-                      onClick={() => setSelectedKey(s.key)}
-                      style={{
-                        padding: '8px 12px',
-                        cursor: 'pointer',
-                        backgroundColor: selectedKey === s.key ? token.controlItemBgActive : 'transparent',
-                        borderRadius: 4,
-                        marginBottom: 4,
-                      }}
-                    >
-                      {s.name}
-                    </div>
-                  ))}
+                  {presetStrategies.map(renderItem)}
                 </div>
               )}
-
+              {variantStrategies.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <Text strong>参数变体</Text>
+                  {variantStrategies.map(renderItem)}
+                </div>
+              )}
               {customStrategies.length > 0 && (
                 <div>
                   <Text strong>自定义策略</Text>
-                  {customStrategies.map((s) => (
-                    <div
-                      key={s.key}
-                      onClick={() => setSelectedKey(s.key)}
-                      style={{
-                        padding: '8px 12px',
-                        cursor: 'pointer',
-                        backgroundColor: selectedKey === s.key ? token.controlItemBgActive : 'transparent',
-                        borderRadius: 4,
-                        marginBottom: 4,
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <span>{s.name}</span>
-                      {s.category === 'visual' && <Tag color="purple" style={{ marginRight: 0 }}>可视化</Tag>}
-                    </div>
-                  ))}
+                  {customStrategies.map(renderItem)}
                 </div>
               )}
-
-              {customStrategies.length === 0 && presetStrategies.length === 0 && (
-                <Empty description="暂无策略" />
-              )}
+              {strategies.length === 0 && <Empty description="暂无策略" />}
             </Card>
           </Splitter.Panel>
 
-          {/* 右侧：代码编辑器 / 可视化编辑器 */}
           <Splitter.Panel>
-            {editMode === 'visual' ? (
-              <Card
-                title="可视化策略编辑器"
-                style={{ height: '100%' }}
-                bodyStyle={{ height: 'calc(100% - 56px)', padding: 0 }}
-                extra={
-                  <Radio.Group
-                    value={editMode}
-                    onChange={(e) => setEditMode(e.target.value)}
-                    size="small"
-                  >
-                    <Radio.Button value="code"><CodeOutlined /> 编程模式</Radio.Button>
-                    <Radio.Button value="visual"><AimOutlined /> 可视化模式</Radio.Button>
-                  </Radio.Group>
-                }
-              >
-                <VisualEditor
-                  ruleKey={selectedKey}
-                  ruleName={strategies.find((s) => s.key === selectedKey)?.name || ''}
-                  onSaved={() => loadStrategies()}
-                  onKeyChange={(k) => setSelectedKey(k)}
-                />
-              </Card>
-            ) : (
-              <Card
-                title={
-                  selectedKey
-                    ? `编辑策略: ${selectedKey}`
-                    : '新策略（请输入策略key并保存）'
-                }
-                extra={
+            <Card
+              title={current ? `${current.name} 的参数` : '未选择策略'}
+              style={{ height: '100%', overflow: 'auto' }}
+              extra={
+                current && (
                   <Space>
-                    {/* 编辑模式切换 */}
-                    <Radio.Group
-                      value={editMode}
-                      onChange={(e) => setEditMode(e.target.value)}
-                      size="small"
-                    >
-                      <Radio.Button value="code"><CodeOutlined /> 编程模式</Radio.Button>
-                      <Radio.Button value="visual"><AimOutlined /> 可视化模式</Radio.Button>
-                    </Radio.Group>
-
-                    <Input
-                      placeholder="策略key（如 my_strategy）"
-                      value={selectedKey}
-                      onChange={(e) => setSelectedKey(e.target.value)}
-                      style={{ width: 200 }}
-                    />
-                    <Button
-                      type="primary"
-                      icon={<SaveOutlined />}
-                      loading={saving}
-                      onClick={handleSave}
-                    >
-                      保存
-                    </Button>
-                    {selectedKey && strategies.find((s) => s.key === selectedKey)?.type === 'custom' && (
+                    <Button icon={<SaveOutlined />} onClick={openSaveAs}>另存为新策略</Button>
+                    {(current.type === 'variant' || current.type === 'custom') && (
                       <Popconfirm title="确认删除该策略？" onConfirm={handleDelete}>
-                        <Button danger icon={<DeleteOutlined />}>
-                          删除
-                        </Button>
+                        <Button danger icon={<DeleteOutlined />}>删除</Button>
                       </Popconfirm>
                     )}
                   </Space>
-                }
-                style={{ height: '100%' }}
-                bodyStyle={{ height: 'calc(100% - 56px)', padding: 0 }}
-              >
-                {editMode === 'code' ? (
-                  /* 编程模式：Monaco Editor */
-                  <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                    {selectedScreening && (
-                      <Alert
-                        type="info"
-                        showIcon
-                        style={{ margin: 8 }}
-                        message="这是「选股类」预置策略"
-                        description="该类策略只用于实时选股池 / 盘中监控，不在回测中运行。实际参数（CCI阈值、MACD零线带宽、成交额、选股周期等）请在左侧菜单「实时选股池」页面通过可视化因子面板配置；下方为策略规范代码，仅供查看，不可修改。"
-                      />
-                    )}
-                    <div style={{ flex: 1, minHeight: 0 }}>
-                    <Editor
-                      height="100%"
-                      language="python"
-                      theme="vs-dark"
-                      value={code}
-                      onChange={(val) => setCode(val || '')}
-                      options={{
-                        fontSize: 14,
-                        fontFamily: 'Consolas, "Courier New", monospace',
-                        minimap: { enabled: false },
-                        scrollBeyondLastLine: false,
-                        automaticLayout: true,
-                        tabSize: 4,
-                        wordWrap: 'on',
-                        readOnly: loading || (selectedKey !== '' && strategies.find((s) => s.key === selectedKey)?.type !== 'custom'),
-                      }}
+                )
+              }
+            >
+              {!current ? (
+                <Empty description="请在左侧选择一个策略" />
+              ) : (
+                <>
+                  {current.description && (
+                    <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                      {current.description}
+                    </Paragraph>
+                  )}
+                  {current.type === 'variant' && current.base_key && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message={`参数变体：基于预置策略「${current.base_key}」，已固化下方参数`}
                     />
-                    </div>
-                    </div>
-                ) : (
-                  <div style={{ height: 'calc(100% - 50px)', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                    <Empty description="可视化拖拽编辑模式正在开发中..." />
-                  </div>
-                )}
-              </Card>
-            )}
+                  )}
+                  {isScreening && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="这是「选股类」策略"
+                      description="选股类策略用于实时选股池 / 盘中监控，通常不在回测中运行。如需查看效果请到「实时选股池」页。"
+                    />
+                  )}
+
+                  <StrategyParamsForm
+                    params={current.params || []}
+                    values={paramValues}
+                    onChange={setParamValues}
+                  />
+
+                  <Card size="small" title="回测" style={{ marginTop: 16 }}>
+                    <Space wrap size={12}>
+                      <span>
+                        <Text style={{ marginRight: 6 }}>股票代码</Text>
+                        <Input
+                          style={{ width: 130 }}
+                          value={symbol}
+                          onChange={(e) => setSymbol(e.target.value)}
+                          placeholder="如 000001"
+                        />
+                      </span>
+                      <span>
+                        <Text style={{ marginRight: 6 }}>回测区间</Text>
+                        <RangePicker
+                          value={range}
+                          onChange={(v) => {
+                            if (v && v[0] && v[1]) setRange([v[0], v[1]])
+                          }}
+                        />
+                      </span>
+                      <span>
+                        <Text style={{ marginRight: 6 }}>初始资金</Text>
+                        <InputNumber
+                          style={{ width: 150 }}
+                          min={10000}
+                          step={100000}
+                          value={cash}
+                          onChange={(v) => setCash(v || 1000000)}
+                        />
+                      </span>
+                      <Button
+                        type="primary"
+                        icon={<ThunderboltOutlined />}
+                        loading={running}
+                        onClick={handleRunBacktest}
+                      >
+                        立即回测
+                      </Button>
+                    </Space>
+                  </Card>
+                </>
+              )}
+            </Card>
           </Splitter.Panel>
         </Splitter>
       </Layout>
 
-      <Card style={{ marginTop: 16 }} title="Backtrader策略编写指南">
-        <Paragraph>
-          <ul>
-            <li>策略必须继承 <Text code>bt.Strategy</Text></li>
-            <li>在 <Text code>__init__</Text> 中定义指标（如均线、MACD等）</li>
-            <li>在 <Text code>next</Text> 中编写交易逻辑（使用 <Text code>self.buy()</Text> 和 <Text code>self.close()</Text>）</li>
-            <li>使用 <Text code># Name:</Text> 和 <Text code># Description:</Text> 注释来定义策略名称和描述</li>
-            <li>保存后，在"回测"页面可以选择该策略进行回测</li>
-            <li><Text strong>编程模式</Text>：使用Monaco编辑器编写Python代码，预置策略的代码也可见</li>
-            <li><Text strong>可视化模式</Text>：通过拖拽模块构建策略（正在开发）</li>
-          </ul>
-        </Paragraph>
-      </Card>
+      <Modal
+        title="另存为新策略"
+        open={saveOpen}
+        onCancel={() => setSaveOpen(false)}
+        onOk={handleSaveAs}
+        confirmLoading={saving}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="原策略保持不变"
+            description="当前参数会固化成一条新策略记录，出现在列表的「参数变体」分组中，之后可继续调参和回测。"
+          />
+          <div>
+            <div style={{ marginBottom: 4 }}>策略 key（字母开头，可含数字/下划线/连字符）</div>
+            <Input
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              placeholder="如 my_dual_ma_8_30"
+            />
+          </div>
+          <div>
+            <div style={{ marginBottom: 4 }}>策略名称</div>
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="显示用的名称"
+            />
+          </div>
+        </Space>
+      </Modal>
     </div>
   )
 }
