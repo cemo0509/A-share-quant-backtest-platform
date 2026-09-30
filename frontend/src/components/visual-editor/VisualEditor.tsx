@@ -177,8 +177,32 @@ export default function VisualEditor({ ruleKey, ruleName, onSaved, onKeyChange }
     if (miss.length > 0) { message.warning(`「${miss[0]}」使用 between 区间，请同时填写下限和上限`); return }
     setSaving(true)
     try {
+      // 1) 保存规则本身，供下次打开继续编辑
       await saveVisualRule({ key: finalKey, name: name || finalKey, description: desc, rule })
-      message.success('可视化策略已保存')
+
+      // 2) 同步发布为可执行策略：条件 → 代码 → 自定义策略。
+      //    只有走到这一步，它才会出现在 /api/strategy/list 里、能被回测页选中运行
+      //    （可视化规则本身只存在 /api/visual/list，不在策略列表中）。
+      //    发布失败（例如条件触发 A-01 退化拦截）不回滚规则：草稿仍在，并明确告知原因。
+      let published = false
+      try {
+        const cg = await codegenVisualRule({
+          rule, name: name || finalKey, description: desc, exit_mode: 'reverse',
+        })
+        const d = cg.data?.data
+        const code = d?.code
+        if (cg.data?.status === 'error' || !d?.valid || !code) {
+          throw new Error(cg.data?.detail || d?.error || '代码生成失败')
+        }
+        await saveCustomStrategy(finalKey, code)
+        published = true
+      } catch (e2: any) {
+        message.warning(
+          `规则已保存，但未能发布为可执行策略：${e2?.response?.data?.detail || e2?.message || '未知原因'}`,
+        )
+      }
+
+      message.success(published ? '策略已保存并发布到策略列表' : '规则已保存（未发布）')
       onKeyChange?.(finalKey)
       onSaved()
     } catch (e: any) {

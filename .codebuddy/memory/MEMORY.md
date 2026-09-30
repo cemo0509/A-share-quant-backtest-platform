@@ -5,6 +5,12 @@
 ### 后端：必须用 python-embed 的解释器
 - **唯一可用解释器**：`python-embed\python.exe`（Python 3.11.9）——装有全部依赖
   （aiohttp 3.14.1 / pandas 3.0.3 / fastapi / uvicorn）。
+- **⚠️ 嵌入式 Python 的 `sys.path` 不含当前目录，也不读 `PYTHONPATH`**（2026-09-30 实测）：
+  所以 `cd backend` 后 `python-embed\python.exe xxx.py` 会报
+  `ModuleNotFoundError: No module named 'core'`；`python -m xxx` 同样失败。
+  临时脚本必须在开头写
+  `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))`。
+  （`pytest` 不受影响——它会自己把 rootdir 加进搜索路径，所以以前跑测试没暴露这个问题。）
 - 系统里**另外两个 Python 都缺依赖，启动必崩**：
   - `py` → Python 3.14.6（`AppData\Local\Python\pythoncore-3.14-64`）：`ModuleNotFoundError: No module named 'aiohttp'`
   - uv 的 `Astral\CPython3.12.14`（`AppData\Roaming\uv\python\...`）：同样缺 aiohttp
@@ -80,8 +86,10 @@ Start-Process -FilePath 'node' -ArgumentList 'node_modules/vite/bin/vite.js' `
   - Q2 页面 B：新建 `CustomStrategy.tsx` 页面壳，**整体复用 `VisualEditor` 组件**（自带保存/生成代码/回测闭环）。
   - Q3 存储：新增参数化变体 `variants/<key>.json`（key/name/base_key/params）+ 扩展 `get_strategy`
     + `list_strategies` 合并 + 新接口 `POST /api/strategy/variant/save`。
-- 用户决策：① 代码模式（Monaco）**直接移除**，A/B 都不保留代码编辑；② 严格按边界不动回测页；
-  ③ **暂缓开工**，用户还要再确认。
+- **已于 2026-09-30 实施完成并推送（commit `ddf93ee`）**：① 代码模式（Monaco）按决策直接移除；
+  ② 严格按边界，回测页 `Backtest.tsx` 未动；③ 已验证：15 个策略参数与需求附件逐条一致，
+  类型全覆盖（int 42 / float 24 / select 2 / bool 1 / list 1）；
+  变体回测确认固化参数生效（另存 5/10 → 8 笔交易，默认 5/20 → 3 笔，结果不同）。
 - ⚠️ 遗留待确认：移除代码编辑后，已保存的 Python 自定义策略（`strategies/custom/*.py`）**没有编辑入口**
   （回测页仍可选到），是否需要保留删除/管理入口。
 
